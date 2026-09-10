@@ -22,7 +22,7 @@ android {
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.redtv.app"
+        applicationId = "com.redtv.next"
         minSdk = 23
         targetSdk = 34
         versionCode = releaseVersionCode
@@ -30,7 +30,7 @@ android {
 
         buildConfigField("int", "BUILD_NUMBER", "$ciBuildNumber")
         buildConfigField("String", "GH_OWNER", "\"BigR3D210\"")
-        buildConfigField("String", "GH_REPO", "\"redtv\"")
+        buildConfigField("String", "GH_REPO", "\"redtv-next\"")
     }
 
     signingConfigs {

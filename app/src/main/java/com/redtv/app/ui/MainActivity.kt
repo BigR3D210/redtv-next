@@ -98,7 +98,7 @@ class MainActivity : AppCompatActivity() {
                 if(generation!=loadGeneration)return@launch
                 catalog=ContentRepository.allChannels()
                 rebuildCategories()
-                b.title.text="Red TV"
+                b.title.text="Red TV Next"
                 if(!prefs.hasSource()) {showEmpty("Your player, your library. Add a source, or use Tools to open a link or local video.");return@launch}
                 if(cached)b.progress.visibility=View.GONE
                 ContentRepository.reload(prefs)

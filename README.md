@@ -1,4 +1,4 @@
-# Red TV 1.2 — personal IPTV and video player
+# Red TV Next — personal IPTV and video player
 
 A free native Android TV / Fire TV / Google TV player. No app account, ads, subscription, cloud backend or feature paywalls. Supply your own playable sources. This app does not include a TV service.
 
@@ -20,16 +20,16 @@ A free native Android TV / Fire TV / Google TV player. No app account, ads, subs
 
 ## Install and first run
 
-The provided APK is a **debug-signed test build**, ready to sideload on Android 6+ (API 23), Fire OS 6+ and Google TV. Older Fire OS 5 devices are not supported by this encrypted-storage build.
+The GitHub release APK is a **signed Red TV Next build**, ready to sideload on Android 6+ (API 23), Fire OS 6+ and Google TV. Older Fire OS 5 devices are not supported by this encrypted-storage build.
 
 Copy the APK to your usual sideloading method, or use:
 ```
 adb connect YOUR_TV_IP:5555
-adb install -r RedTV-1.2-test.apk
+adb install -r app-release.apk
 ```
 On Fire TV enable installation for the app doing the sideload. Open Red TV, select **Sources → Add source**, enter your M3U URL or Xtream login and test the connection. The player can also open a link or local video without adding a source.
 
-Android requires the same signing key for an in-place update. If a previous installation has a different key, do not uninstall casually: that removes app data. Build with that original key to preserve the installation. The test APK is not a published release.
+Android requires the same signing key for an in-place update. If a previous installation has a different key, do not uninstall casually: that removes app data. Build with that original key to preserve the installation. Red TV Next has a separate app identity (com.redtv.next), so it installs alongside the original Red TV. Add your source again in Next.
 
 ## Daily use
 
@@ -76,7 +76,7 @@ Run laptop companion tests with:
 python -m unittest discover -s companion -p "test_*.py"
 ```
 
-[Build and signing details](BUILD_ON_GITHUB.md). CI builds and checks on pushes/PRs; publication is a separate manual action requiring the original signing key. Nothing is automatically published by this local upgrade.
+[Build and signing details](BUILD_ON_GITHUB.md). Pushes to main run checks and automatically publish a signed release when successful. Tools → Check for updates downloads future releases from BigR3D210/redtv-next. Pull requests only run checks.
 
 ## Device acceptance checks
 
@@ -90,4 +90,5 @@ Before using this as your everyday player:
 7. Disconnect networking briefly and confirm retries and cached browsing behave correctly.
 
 Physical TV, codec, stream and synchronization testing is not replaced by automated tests. Recording/DVR, transcoding, DRM-provider integration and cloud remote access are not implemented.
+
 
