@@ -66,4 +66,22 @@
         android:textColor="@color/text_primary"
         android:textSize="16sp"
         android:visibility="gone" />
+    <Button
+        android:id="@+id/optionsButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="16dp"
+        android:text="Options"
+        android:focusable="true" />
+
+    <Button
+        android:id="@+id/retryButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="80dp"
+        android:text="Retry playback"
+        android:focusable="true"
+        android:visibility="gone" />
 </FrameLayout>

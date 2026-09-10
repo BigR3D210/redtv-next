@@ -1,146 +1,93 @@
-# Red TV — Android TV / Fire TV IPTV Player
+# Red TV 1.2 — personal IPTV and video player
 
-A native Android TV IPTV **player** for Fire TV Stick and Android TV boxes. It is a media
-player only: it plays whatever streams you point it at through your own account config.
-Loading legal content (your paid IPTV subscription or free legal playlists) is your
-responsibility, exactly like VLC, Kodi, or TiVimate.
+A free native Android TV / Fire TV / Google TV player. No app account, ads, subscription, cloud backend or feature paywalls. Supply your own playable sources. This app does not include a TV service.
 
-Built with Kotlin + Media3/ExoPlayer + Leanback launcher support. One APK installs on both
-Fire TV and Android TV.
+## What's included
 
-## Features in this build
-- **Two source types:** M3U / M3U8 playlist (URL or file) and Xtream Codes login.
-- **Multiple sources:** save several providers as named profiles and switch between them
-  instantly with the **Sources** button. Great for a main line plus a backup.
-- **Remote account config:** a profile can point to a config.json URL you host online and
-  edit anytime to change channels or login. The app re-reads on every launch. No rebuild.
-- **EPG / TV guide:** XMLTV support. Shows Now / Next on cards and in the player overlay.
-- **Favorites, categories, Continue Watching:** sidebar with Continue, Favorites, Recent, All,
-  provider categories, and a Hidden list.
-- **Channel management:** long-press OK on any channel to Favorite, **Pin to top** (reorder),
-  or **Hide** it. Optional **Hide duplicate channels** toggle in setup.
-- **Search:** filter channels and movies by name.
-- **Resume / recent:** movies resume where you left off; recent channels tracked; movies in
-  progress appear under Continue.
-- **Player polish:** aspect-ratio toggle (Fit / Stretch / Zoom), audio-track and
-  subtitle/CC selection, tuned buffering. Press **Menu** on the remote in the player for options.
-- **D-pad first UI:** focus highlights, channel up/down in the player.
+- Multiple named M3U and Xtream sources with isolated favorites, ordering, hidden channels and history.
+- Stable stream identities, saved catalog startup, background refresh and independent XMLTV guide loading.
+- Live TV, movies, series, sports, favorites, Continue Watching, watch history and a recoverable Hidden screen.
+- Resume for movies, episodes, direct video links and local files; finished items leave Continue Watching.
+- Optional next-episode autoplay (off by default), season selection and watched markers.
+- Channel rename, category override, pinning, move earlier/later and name/number/category sorting on TV.
+- Paired laptop/phone browser editor: search, bulk favorite/hide/category operations, rename/reorder, source editing and send a media link to TV.
+- Direct HTTP(S) media links, local/USB video picker where the device provides one, and a laptop media companion with seeking support.
+- Two- or four-pane multiview, one audible pane, replace/remove/retry and full screen.
+- Paired room playback: a second TV follows the host's channel, play/pause and timing when the stream supports it.
+- Three-hour TV guide timeline with earlier/later navigation, favorites filter and program details.
+- Reconnect attempts, manual Retry, previous channel, audio/subtitle selection and language preferences, picture size and sleep timer.
+- Encrypted credential/catalog/history files, expiring LAN pairing, CSRF protection and signed-update verification.
 
-## 1. Build the APK (Android Studio)
-1. Install **Android Studio** (latest). It bundles Gradle and JDK 17.
-2. `File > Open` and select this **RedTV** folder. Let it sync (it downloads Gradle 8.7 and
-   the AndroidX/Media3 libraries the first time).
-3. Plug in or pair a device, or just build the APK: `Build > Build Bundle(s)/APK(s) > Build APK(s)`.
-4. The APK lands in `app/build/outputs/apk/debug/app-debug.apk`.
+## Install and first run
 
-CLI alternative (if you have Gradle installed): run `gradle wrapper` once in this folder to
-generate the wrapper, then `./gradlew assembleDebug`.
+The provided APK is a **debug-signed test build**, ready to sideload on Android 6+ (API 23), Fire OS 6+ and Google TV. Older Fire OS 5 devices are not supported by this encrypted-storage build.
 
-## 2. Sideload to a Fire TV Stick
-1. On the Firestick: **Settings > My Fire TV > Developer Options > Install unknown apps**, and
-   enable it for the **Downloader** app (install Downloader from the Amazon Appstore first).
-2. Put `app-debug.apk` somewhere reachable (Google Drive direct link, Dropbox direct link, or
-   a small web host). Open Downloader and enter that URL to download + install.
-3. Alternative over Wi-Fi with adb (PC):
-   ```
-   adb connect <firestick-ip>:5555
-   adb install -r app-debug.apk
-   ```
-   Find the IP under Settings > My Fire TV > About > Network.
-
-## 3. Sideload to an Android TV box
-Either use the same **Downloader** method, or `adb install -r app-debug.apk` over USB/Wi-Fi.
-The app shows up in the launcher row because it declares `LEANBACK_LAUNCHER`.
-
-## 4. Host your config online (the "edit online" part)
-The app needs a URL that returns your config.json. Easiest options:
-
-**GitHub (free, fast):**
-1. Create a repo, add `config.json` (use the editor or the example files here).
-2. Open the file, click **Raw**, copy that `raw.githubusercontent.com/...` URL.
-3. Paste it into the app's setup screen. To update channels/login later, edit the file in
-   GitHub and the app picks it up next launch.
-
-**Firebase Hosting / Cloudflare Pages / any static host:** upload `config.json`, use its
-public URL. Same idea.
-
-Use **`web-editor/index.html`** (open it in any browser) to build or edit the JSON visually,
-then Download `config.json` and upload it to your host. Two ready examples are included:
-`config.example.m3u.json` and `config.example.xtream.json`.
-
-### config.json shape
-```json
-{
-  "accountId": "red-001",
-  "appName": "Red TV",
-  "userAgent": "RedTV/1.0 (Android)",
-  "source": {
-    "type": "xtream",
-    "host": "http://provider.com:8080",
-    "username": "USER",
-    "password": "PASS",
-    "epgUrl": "http://provider.com:8080/xmltv.php?username=USER&password=PASS"
-  }
-}
+Copy the APK to your usual sideloading method, or use:
 ```
-For an M3U source use `"type": "m3u"` and `"m3uUrl": "..."` instead of host/username/password.
-
-## 5. Quick test without a subscription
-Set the source to M3U and use a free legal playlist, e.g. the public iptv-org list in
-`config.example.m3u.json`. Channels load straight away so you can verify the UI and playback
-on your device before pointing it at your own provider.
-
-## Build a signed release APK (shareable, no debug warning)
-A debug APK works for your own testing, but a signed release APK is what you share or
-distribute. Setup is one-time:
-
-1. Generate a keystore (run from the project root):
-   - Mac/Linux: `./make-keystore.sh`
-   - Windows: `make-keystore.bat`
-   This creates `redtv-release.jks` and `keystore.properties`. **Back up the .jks file** -
-   you need the exact same keystore to push updates later.
-2. Build the signed APK:
-   - Android Studio: `Build > Generate Signed Bundle / APK` (or just `Build APK` once
-     `keystore.properties` exists - the release build auto-signs).
-   - CLI: `./gradlew assembleRelease`
-3. Output: `app/build/outputs/apk/release/app-release.apk`. Sideload it the same way as the
-   debug APK.
-
-If `keystore.properties` is absent, the project still builds fine (release just stays
-unsigned), so this step is optional until you want to distribute.
-
-## Using the app
-- First launch shows **Setup**. Name the source, then paste your config URL (recommended) or
-  enter an M3U / Xtream source manually.
-- Browse with the D-pad. Left column = categories (Continue, Favorites, Recent, All, ...).
-  OK opens a channel. **Long-press OK** on a channel for Favorite / Pin to top / Hide.
-- In the player: **Channel Up/Down** or **D-pad Up/Down** switches channels. Press **Menu** for
-  aspect ratio, audio track, and subtitles. Info overlay shows Now/Next from the EPG.
-- **Sources** (top right) switches between saved providers or adds a new one.
-- **Settings** reopens setup to edit the active source or toggle "Hide duplicate channels".
-
-## Project layout
+adb connect YOUR_TV_IP:5555
+adb install -r RedTV-1.2-test.apk
 ```
-app/src/main/java/com/redtv/app/
-  model/    data classes + config schema
-  net/      Http, M3uParser, XtreamClient, EpgParser
-  data/     Prefs (profiles, favorites, hidden, pinned, recents, resume), ContentRepository
-  ui/       SetupActivity, MainActivity (browser), PlayerActivity, adapters
-web-editor/ index.html   visual config.json builder
-config.example.*.json    ready-to-host samples
-make-keystore.sh/.bat    one-time release keystore generator
+On Fire TV enable installation for the app doing the sideload. Open Red TV, select **Sources → Add source**, enter your M3U URL or Xtream login and test the connection. The player can also open a link or local video without adding a source.
+
+Android requires the same signing key for an in-place update. If a previous installation has a different key, do not uninstall casually: that removes app data. Build with that original key to preserve the installation. The test APK is not a published release.
+
+## Daily use
+
+- **Guide** opens the timeline. Selecting a program offers playback of its channel live; it does not promise catch-up.
+- **Long-press OK** on a tile to favorite, pin, hide/unhide, rename, change category, reorder or manage history.
+- **Tools → Sort channels** sets your preferred order. Pinned items remain first.
+- **Tools → Playback preferences** controls next-episode autoplay, subtitles and duplicate-name hiding.
+- **Continue** lists unfinished movies and episodes. **History** includes previously started playback.
+- In playback, use the visible **Options** button or the remote Menu key. Up/down zaps live channels when playback controls are hidden.
+- Movie and series poster cards use the artwork your source supplies. Metadata availability depends on the source.
+- History retains up to 300 items per source. Legacy favorites with unambiguous IDs migrate once; old positional M3U IDs cannot safely be matched after a playlist changes.
+
+## Organize from a laptop or phone
+
+Open **Tools → Edit from laptop or phone** on the TV. On the same trusted home network, visit its displayed address and enter the six-digit code. No permanent account is needed.
+
+The code expires after ten minutes, attempts are limited, and closing the TV editor signs browsers out. Secret values are never returned in the editor HTML/API; blank source credential fields retain existing values. LAN traffic uses HTTP, so use a trusted home network and never expose these ports to the internet.
+
+For local laptop videos, see [the companion guide](docs/LAN-AND-LAPTOP.md). The companion serves only media files in a folder you choose, with an unpredictable access token and byte-range seeking. Keep it running during playback. Python 3 is required; there is no transcoder.
+
+## Multiview and another room
+
+Choose **Tools → Multiview**, select two to four channels, then Watch. Start with two panes on lower-powered sticks. Extra panes and TVs use additional provider connections and hardware decoders; the app cannot override those limits.
+
+On the host TV: play a stream → **Options → Share playback with another TV**. On the other TV: **Tools → Join another TV**, enter the host address and code. Pairing shares that video's source link with the paired TV. Leaving playback stops hosting.
+
+VOD uses media position; timed live streams use the stream's absolute program clock. Untimed live streams follow the same channel at their own live edge. This is best-effort synchronization, not frame-perfect whole-home audio. Private files selected through a TV's local file picker are not transferable to another TV; use a laptop HTTP link accessible to both.
+
+## Build and checks
+
+JDK 17, Android SDK platform 34 and build tools are required. The checked-in Gradle wrapper downloads Gradle 8.10.2.
+
+```
+./gradlew testDebugUnitTest lintDebug assembleDebug
 ```
 
-## Extending it (v2 ideas)
-- **Series support:** add `get_series` / `get_series_info` calls in `XtreamClient` to list
-  episodes (`{host}/series/{user}/{pass}/{episodeId}.{ext}`).
-- **Full EPG grid:** a timeline view per channel using the parsed `EpgParser` data.
-- **Timeshift / catch-up / DVR**, multi-view, parental PIN, Stalker portal source type.
-- **Cloud account link:** swap the static JSON for a tiny backend (Firebase Auth + Firestore)
-  so logins are tied to a real account and you can push updates per user.
+Windows:
+```powershell
+./scripts/build.ps1 -JavaHome "PATH_TO_JDK17" -AndroidSdk "PATH_TO_ANDROID_SDK"
+```
 
-## Notes
-- Cleartext HTTP is allowed (`network_security_config.xml`) because many providers serve over
-  http. Streams come only from URLs in your config.
-- minSdk 21 covers Fire TV Stick gen 2+ and essentially all current Android TV boxes.
-- This is a debug build for testing. For wider distribution, generate a signed release APK.
+Run laptop companion tests with:
+```
+python -m unittest discover -s companion -p "test_*.py"
+```
+
+[Build and signing details](BUILD_ON_GITHUB.md). CI builds and checks on pushes/PRs; publication is a separate manual action requiring the original signing key. Nothing is automatically published by this local upgrade.
+
+## Device acceptance checks
+
+Before using this as your everyday player:
+1. Add your source and play a live channel; test remote controls, audio and subtitles.
+2. Watch a movie/episode, exit, then resume from Continue. Enable autoplay and finish an episode.
+3. Rename/reorder/hide/unhide a channel on TV and through the browser; restart the app.
+4. Try two panes, then four. If playback fails or stutters, reduce the pane count.
+5. Pair another TV and test channel changes, pause/play and drift. Try both live and VOD.
+6. Play a laptop file and seek forward/back. Keep the laptop awake.
+7. Disconnect networking briefly and confirm retries and cached browsing behave correctly.
+
+Physical TV, codec, stream and synchronization testing is not replaced by automated tests. Recording/DVR, transcoding, DRM-provider integration and cloud remote access are not implemented.
+

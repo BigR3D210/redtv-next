@@ -40,7 +40,40 @@ data class Channel(
     val category: String = "Uncategorized",
     val epgChannelId: String? = null,
     val number: Int? = null,
-    val section: String = Section.LIVE
+    val section: String = Section.LIVE,
+    val kind: String = when {
+        id.startsWith("series_") -> ContentKind.SERIES
+        id.startsWith("ep_") -> ContentKind.EPISODE
+        section == Section.MOVIES -> ContentKind.MOVIE
+        section == Section.SERIES -> ContentKind.EPISODE
+        else -> ContentKind.LIVE
+    },
+    val providerId: String = "",
+    val sourceId: String = id,
+    val seriesId: String? = null,
+    val season: Int? = null,
+    val episode: Int? = null,
+    val description: String? = null,
+    val durationSeconds: Long? = null,
+    val headers: Map<String, String> = emptyMap()
+) {
+    val isVod: Boolean get() = kind == ContentKind.MOVIE || kind == ContentKind.EPISODE
+    val isSeries: Boolean get() = kind == ContentKind.SERIES
+}
+
+object ContentKind {
+    const val LIVE = "live"
+    const val MOVIE = "movie"
+    const val SERIES = "series"
+    const val EPISODE = "episode"
+}
+
+data class WatchEntry(
+    val channel: Channel,
+    val positionMs: Long,
+    val durationMs: Long,
+    val watchedAt: Long,
+    val completed: Boolean = false
 )
 
 data class SourceProfile(

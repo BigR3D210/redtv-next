@@ -24,8 +24,8 @@ object XtreamClient {
     }
 
     /** Live + Sports + Movies in one shot (the grid-able tiles). */
-    fun load(source: Source): List<Channel> {
-        val ctx = ctx(source)
+    fun load(source: Source, agent: String = Http.userAgent): List<Channel> {
+        val ctx = ctx(source, agent)
         val out = ArrayList<Channel>()
         out += loadLive(ctx)
         runCatching { out += loadVod(ctx) }
@@ -33,17 +33,18 @@ object XtreamClient {
     }
 
     /** Series folders (each opens to its episodes). */
-    fun loadSeries(source: Source): List<Channel> {
-        val ctx = ctx(source)
-        val cats = catMap(get("${ctx.base}&action=get_series_categories"))
-        val arr = getArray("${ctx.base}&action=get_series")
+    fun loadSeries(source: Source, agent: String = Http.userAgent): List<Channel> {
+        val ctx = ctx(source, agent)
+        val cats = runCatching { catMap(get("${ctx.base}&action=get_series_categories", ctx.agent)) }.getOrDefault(emptyMap())
+        val arr = getArray("${ctx.base}&action=get_series", ctx.agent)
         val out = ArrayList<Channel>(arr.size())
         for (e in arr) {
+            if (!e.isJsonObject) continue
             val o = e.asJsonObject
             val id = o.str("series_id") ?: continue
             out.add(
                 Channel(
-                    id = "series_$id",
+                    id = "series_$id", sourceId = id, description = o.str("plot"),
                     name = o.str("name") ?: "Series $id",
                     streamUrl = "",
                     logoUrl = o.str("cover"),
@@ -56,59 +57,64 @@ object XtreamClient {
     }
 
     /** Episodes inside a series, ready to play. */
-    fun loadEpisodes(source: Source, seriesId: String): List<Channel> {
-        val ctx = ctx(source)
-        val json = get("${ctx.base}&action=get_series_info&series_id=$seriesId")
+    fun loadEpisodes(source: Source, seriesId: String, agent: String = Http.userAgent): List<Channel> {
+        val ctx = ctx(source, agent)
+        val json = get("${ctx.base}&action=get_series_info&series_id=${enc(seriesId)}", ctx.agent)
         val root = JsonParser.parseString(json).asJsonObject
-        val episodesObj = root.getAsJsonObject("episodes") ?: return emptyList()
+        val episodes = root.get("episodes") ?: return emptyList()
+        val episodeLists = if(episodes.isJsonObject) episodes.asJsonObject.entrySet().associate { it.key to it.value }
+            else if(episodes.isJsonArray) mapOf("1" to episodes) else emptyMap()
         val out = ArrayList<Channel>()
-        for ((season, list) in episodesObj.entrySet()) {
+        for ((season, list) in episodeLists) {
             if (!list.isJsonArray) continue
             for (e in list.asJsonArray) {
-                val o = e.asJsonObject
+                if (!e.isJsonObject) continue
+            val o = e.asJsonObject
                 val id = o.str("id") ?: continue
                 val ext = o.str("container_extension") ?: "mp4"
                 val title = o.str("title") ?: "Episode $id"
                 out.add(
                     Channel(
-                        id = "ep_$id",
+                        id = "ep_$id", sourceId = id, seriesId = seriesId, season = season.toIntOrNull(), episode = o.str("episode_num")?.toIntOrNull(),
+                        description = o.obj("info")?.str("plot"), durationSeconds = o.obj("info")?.str("duration_secs")?.toLongOrNull(),
                         name = "S${season} • $title",
-                        streamUrl = "${ctx.host}/series/${ctx.user}/${ctx.pass}/$id.$ext",
-                        logoUrl = o.getAsJsonObject("info")?.str("movie_image"),
+                        streamUrl = "${ctx.host}/series/${enc(ctx.user)}/${enc(ctx.pass)}/${enc(id)}.${enc(ext)}",
+                        logoUrl = o.obj("info")?.str("movie_image"),
                         section = Section.SERIES
                     )
                 )
             }
         }
-        return out
+        return out.sortedWith(compareBy<Channel> { it.season ?: 0 }.thenBy { it.episode ?: Int.MAX_VALUE }.thenBy { it.sourceId.toLongOrNull() ?: Long.MAX_VALUE })
     }
 
     // ---- internals ----
 
-    private class Ctx(val host: String, val user: String, val pass: String, val base: String)
+    private class Ctx(val host: String, val user: String, val pass: String, val base: String, val agent: String)
 
-    private fun ctx(source: Source): Ctx {
+    private fun ctx(source: Source, agent: String): Ctx {
         val host = normalizeHost(source.host ?: error("Missing host"))
         val user = source.username ?: error("Missing username")
         val pass = source.password ?: error("Missing password")
         val base = "$host/player_api.php?username=${enc(user)}&password=${enc(pass)}"
-        return Ctx(host, user, pass, base)
+        return Ctx(host, user, pass, base, agent)
     }
 
     private fun loadLive(ctx: Ctx): List<Channel> {
-        val cats = catMap(get("${ctx.base}&action=get_live_categories"))
-        val streams = getArray("${ctx.base}&action=get_live_streams")
+        val cats = runCatching { catMap(get("${ctx.base}&action=get_live_categories", ctx.agent)) }.getOrDefault(emptyMap())
+        val streams = getArray("${ctx.base}&action=get_live_streams", ctx.agent)
         val out = ArrayList<Channel>(streams.size())
         for (e in streams) {
+            if (!e.isJsonObject) continue
             val o = e.asJsonObject
             val id = o.str("stream_id") ?: continue
             val ext = o.str("container_extension") ?: "m3u8"
             val cat = cats[o.str("category_id")] ?: "Live TV"
             out.add(
                 Channel(
-                    id = "live_$id",
+                    id = "live_$id", sourceId = id,
                     name = o.str("name") ?: "Channel $id",
-                    streamUrl = "${ctx.host}/live/${ctx.user}/${ctx.pass}/$id.$ext",
+                    streamUrl = "${ctx.host}/live/${enc(ctx.user)}/${enc(ctx.pass)}/${enc(id)}.${enc(ext)}",
                     logoUrl = o.str("stream_icon"),
                     category = cat,
                     epgChannelId = o.str("epg_channel_id"),
@@ -121,18 +127,19 @@ object XtreamClient {
     }
 
     private fun loadVod(ctx: Ctx): List<Channel> {
-        val cats = catMap(get("${ctx.base}&action=get_vod_categories"))
-        val streams = getArray("${ctx.base}&action=get_vod_streams")
+        val cats = runCatching { catMap(get("${ctx.base}&action=get_vod_categories", ctx.agent)) }.getOrDefault(emptyMap())
+        val streams = getArray("${ctx.base}&action=get_vod_streams", ctx.agent)
         val out = ArrayList<Channel>(streams.size())
         for (e in streams) {
+            if (!e.isJsonObject) continue
             val o = e.asJsonObject
             val id = o.str("stream_id") ?: continue
             val ext = o.str("container_extension") ?: "mp4"
             out.add(
                 Channel(
-                    id = "movie_$id",
+                    id = "movie_$id", sourceId = id, description = o.str("plot"),
                     name = o.str("name") ?: "Movie $id",
-                    streamUrl = "${ctx.host}/movie/${ctx.user}/${ctx.pass}/$id.$ext",
+                    streamUrl = "${ctx.host}/movie/${enc(ctx.user)}/${enc(ctx.pass)}/${enc(id)}.${enc(ext)}",
                     logoUrl = o.str("stream_icon") ?: o.str("cover"),
                     category = cats[o.str("category_id")] ?: "VOD",
                     section = Section.MOVIES
@@ -154,12 +161,14 @@ object XtreamClient {
         return map
     }
 
-    private fun get(url: String): String = Http.getString(url)
+    private fun get(url: String, agent: String): String = Http.getString(url, agent)
 
-    private fun getArray(url: String): JsonArray {
-        val el = JsonParser.parseString(get(url))
+    private fun getArray(url: String, agent: String): JsonArray {
+        val el = JsonParser.parseString(get(url, agent))
         return if (el.isJsonArray) el.asJsonArray else JsonArray()
     }
+
+    private fun JsonObject.obj(key: String): JsonObject? = get(key)?.takeIf { it.isJsonObject }?.asJsonObject
 
     private fun JsonObject.str(key: String): String? {
         val v = get(key) ?: return null
@@ -167,7 +176,7 @@ object XtreamClient {
         return runCatching { v.asString }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
-    private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
+    private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
     private fun normalizeHost(raw: String): String {
         var h = raw.trim().trimEnd('/')
@@ -175,3 +184,6 @@ object XtreamClient {
         return h
     }
 }
+
+
+

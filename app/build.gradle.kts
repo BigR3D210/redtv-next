@@ -14,6 +14,8 @@ val keystoreProps = Properties().apply {
 
 // Build number is injected by CI (-PbuildNumber=<run>) so the in-app updater can compare versions.
 val ciBuildNumber = (project.findProperty("buildNumber") as String?)?.toIntOrNull() ?: 0
+val releaseVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 100
+require(releaseVersionCode in 3..2100000000) { "versionCode must be between 3 and 2100000000" }
 
 android {
     namespace = "com.redtv.app"
@@ -21,10 +23,10 @@ android {
 
     defaultConfig {
         applicationId = "com.redtv.app"
-        minSdk = 21
+        minSdk = 23
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = releaseVersionCode
+        versionName = "1.2"
 
         buildConfigField("int", "BUILD_NUMBER", "$ciBuildNumber")
         buildConfigField("String", "GH_OWNER", "\"BigR3D210\"")
@@ -34,7 +36,7 @@ android {
     signingConfigs {
         if (hasKeystore) {
             create("release") {
-                storeFile = file(keystoreProps["storeFile"] as String)
+                storeFile = rootProject.file(keystoreProps["storeFile"] as String)
                 storePassword = keystoreProps["storePassword"] as String
                 keyAlias = keystoreProps["keyAlias"] as String
                 keyPassword = keystoreProps["keyPassword"] as String
@@ -59,6 +61,7 @@ android {
         viewBinding = true
         buildConfig = true
     }
+    testOptions { unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
@@ -75,6 +78,7 @@ dependencies {
 
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -83,4 +87,7 @@ dependencies {
 
     // Tiny embedded web server for the "edit from laptop" pairing screen
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
 }

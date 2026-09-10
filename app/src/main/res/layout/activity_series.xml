@@ -18,6 +18,15 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <Button
+        android:id="@+id/btnSeason"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="All seasons"
+        android:background="@drawable/bg_button"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/seriesTitle" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/episodeGrid"
         android:layout_width="0dp"
@@ -28,7 +37,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/seriesTitle" />
+        app:layout_constraintTop_toBottomOf="@id/btnSeason" />
 
     <ProgressBar
         android:id="@+id/progress"

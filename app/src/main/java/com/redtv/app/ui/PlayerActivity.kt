@@ -1,223 +1,288 @@
 package com.redtv.app.ui
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.TrackSelectionDialogBuilder
 import com.redtv.app.data.ContentRepository
 import com.redtv.app.data.Prefs
 import com.redtv.app.databinding.ActivityPlayerBinding
 import com.redtv.app.model.Channel
-import com.redtv.app.net.Http
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.redtv.app.net.RoomState
+import com.redtv.app.net.RoomSyncClient
+import com.redtv.app.net.RoomSyncMath
+import com.redtv.app.net.RoomSyncServer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.NetworkInterface
 
 @UnstableApi
 class PlayerActivity : AppCompatActivity() {
-
     private lateinit var b: ActivityPlayerBinding
     private lateinit var prefs: Prefs
-    private var player: ExoPlayer? = null
-
-    private var ids: List<String> = emptyList()
+    private var engine: PlaybackEngine? = null
+    private var queue = emptyList<Channel>()
+    private var queueKey: String? = null
     private var index = 0
-    private val timeFmt = SimpleDateFormat("h:mm a", Locale.getDefault())
+    private var previous = -1
+    private var position: Long? = null
+    private var playing = true
+    private val handler = Handler(Looper.getMainLooper())
+    private var sleepAt = 0L
+    private val sleep = Runnable { engine?.player?.pause(); finish() }
     private val hideInfo = Runnable { b.infoBar.visibility = View.GONE }
-
-    private val resizeModes = intArrayOf(
-        AspectRatioFrameLayout.RESIZE_MODE_FIT,
-        AspectRatioFrameLayout.RESIZE_MODE_FILL,
-        AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-    )
-    private val resizeLabels = arrayOf("Fit", "Stretch", "Zoom")
-    private var resizeIndex = 0
+    private var roomJob: Job? = null
+    private var host: RoomSyncServer? = null
+    private var following = false
+    private val ratios = intArrayOf(0, 3, 4)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         b = ActivityPlayerBinding.inflate(layoutInflater)
         setContentView(b.root)
         prefs = Prefs(this)
-
-        // Keep the TV awake while watching (stops the Fire TV screensaver).
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        b.playerView.keepScreenOn = true
-
-        ids = intent.getStringArrayListExtra(EXTRA_IDS) ?: arrayListOf()
-        if (ids.isEmpty()) {
-            Toast.makeText(this, "No playable channel was selected.", Toast.LENGTH_LONG).show()
+        b.buffering.visibility = View.GONE
+        b.retryButton.setOnClickListener { engine?.retryManually() }
+        b.optionsButton.setOnClickListener { options() }
+        ContentRepository.initialize(this)
+        ContentRepository.restore(prefs)
+        queueKey = savedInstanceState?.getString(EXTRA_QUEUE) ?: intent.getStringExtra(EXTRA_QUEUE)
+        queue = queueKey?.let { ContentRepository.readQueue(this, it) }.orEmpty()
+        if (queue.isEmpty()) queue = intent.getStringArrayListExtra(EXTRA_IDS).orEmpty().mapNotNull { ContentRepository.channelById(it) }
+        if (queue.isEmpty() && queueKey == null && !intent.hasExtra(EXTRA_ROOM_URL)) queue = ContentRepository.launchQueue
+        queue = queue.filter { it.streamUrl.isNotBlank() && !it.isSeries }
+        if (queue.isNotEmpty() && queueKey == null) queueKey = ContentRepository.createQueue(this, queue)
+        index = (savedInstanceState?.getInt(EXTRA_INDEX) ?: intent.getIntExtra(EXTRA_INDEX, 0)).coerceIn(0, (queue.size - 1).coerceAtLeast(0))
+        previous = savedInstanceState?.getInt("previous", -1) ?: -1
+        position = savedInstanceState?.getLong("position")
+        playing = savedInstanceState?.getBoolean("playing", true) ?: true
+        sleepAt = savedInstanceState?.getLong("sleepAt", 0) ?: 0
+        if (queue.isEmpty() && intent.getStringExtra(EXTRA_ROOM_URL) == null) {
+            Toast.makeText(this, "No playable item was selected. Reopen it from the library.", Toast.LENGTH_LONG).show()
             finish()
-            return
         }
-        index = intent.getIntExtra(EXTRA_INDEX, 0).coerceIn(0, (ids.size - 1).coerceAtLeast(0))
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     override fun onStart() {
         super.onStart()
-        initPlayer()
-        playCurrent()
+        if (isFinishing) return
+        engine = PlaybackEngine(this, prefs, { message ->
+            b.errorText.text = message
+            b.errorText.visibility = if (message == null) View.GONE else View.VISIBLE
+            b.retryButton.visibility = if (message?.startsWith("Unable to play") == true) View.VISIBLE else View.GONE
+            if (b.retryButton.visibility == View.VISIBLE) b.retryButton.requestFocus()
+        }, ::onEnded)
+        b.playerView.player = engine?.player
+        b.playerView.resizeMode = prefs.resizeMode
+        if (queue.isNotEmpty()) playCurrent(position)
+        if (sleepAt > 0) handler.postDelayed(sleep, (sleepAt - System.currentTimeMillis()).coerceAtLeast(0))
+        startFollowing()
     }
 
-    private fun initPlayer() {
-        if (player != null) return
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(Http.userAgent)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(20_000)
-            .setReadTimeoutMs(30_000)
-
-        val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15_000, 60_000, 2_500, 5_000)
-            .build()
-
-        val p = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
-            .setLoadControl(loadControl)
-            .build()
-        p.addListener(object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                b.buffering.visibility = if (state == Player.STATE_BUFFERING) View.VISIBLE else View.GONE
-            }
-            override fun onPlayerError(error: PlaybackException) {
-                b.errorText.text = "Playback error: ${error.errorCodeName}\n${error.message ?: ""}"
-                b.errorText.visibility = View.VISIBLE
-            }
-        })
-        b.playerView.player = p
-        b.playerView.resizeMode = resizeModes[resizeIndex]
-        player = p
+    private fun playCurrent(at: Long? = null) {
+        val ch = queue.getOrNull(index) ?: return
+        engine?.play(ch, at ?: if (ch.isVod) prefs.resumePosition(ch.id) else 0, playing)
+        showInfo()
     }
 
-    private fun currentChannel(): Channel? =
-        ids.getOrNull(index)?.let { ContentRepository.channelById(it) }
-
-    private fun playCurrent() {
-        val ch = currentChannel() ?: run {
-            b.errorText.text = "Channel not found."
-            b.errorText.visibility = View.VISIBLE
-            return
-        }
-        b.errorText.visibility = View.GONE
-        val p = player ?: return
-
-        p.setMediaItem(MediaItem.fromUri(ch.streamUrl))
-        p.prepare()
-
-        if (ch.id.startsWith("movie_") || ch.id.startsWith("ep_")) {
-            val pos = prefs.resumePosition(ch.id)
-            if (pos > 0) p.seekTo(pos)
-        }
-        p.playWhenReady = true
-
-        prefs.pushRecent(ch.id)
-        prefs.lastChannelId = ch.id
-        showInfo(ch)
-    }
-
-    private fun showInfo(ch: Channel) {
-        b.infoName.text = ch.name
+    private fun showInfo() {
+        val ch = engine?.channel ?: return
+        b.infoName.text = prefs.displayChannel(ch).name
         val (now, next) = ContentRepository.nowAndNext(ch.epgChannelId)
-        if (now != null) {
-            b.infoNow.visibility = View.VISIBLE
-            b.infoNow.text = "Now: ${now.title}  (${timeFmt.format(Date(now.startMillis))})"
-        } else b.infoNow.visibility = View.GONE
-        if (next != null) {
-            b.infoNext.visibility = View.VISIBLE
-            b.infoNext.text = "Next: ${next.title}  (${timeFmt.format(Date(next.startMillis))})"
-        } else b.infoNext.visibility = View.GONE
-
+        b.infoNow.text = now?.let { "Now: ${it.title}" }.orEmpty()
+        b.infoNext.text = next?.let { "Next: ${it.title}" }.orEmpty()
         b.infoBar.visibility = View.VISIBLE
-        b.infoBar.removeCallbacks(hideInfo)
-        b.infoBar.postDelayed(hideInfo, 3500)
+        handler.removeCallbacks(hideInfo)
+        handler.postDelayed(hideInfo, 3500)
     }
 
-    private fun switchBy(delta: Int) {
-        if (ids.isEmpty()) return
-        saveResume()
-        index = (index + delta + ids.size) % ids.size
+    private fun switchTo(target: Int) {
+        if (following || target !in queue.indices) return
+        previous = index
+        index = target
+        position = null
+        playing = true
         playCurrent()
     }
 
-    private fun openOptions() {
-        val items = arrayOf(
-            "Aspect ratio:  ${resizeLabels[resizeIndex]}",
-            "Audio track",
-            "Subtitles / CC"
-        )
-        AlertDialog.Builder(this)
-            .setTitle("Options")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> cycleAspect()
-                    1 -> showTrackDialog(C.TRACK_TYPE_AUDIO, "Audio track")
-                    2 -> showTrackDialog(C.TRACK_TYPE_TEXT, "Subtitles / CC")
-                }
+    private fun onEnded() {
+        if (following) return
+        val current = queue.getOrNull(index) ?: return
+        val next = queue.getOrNull(index + 1) ?: return
+        if (PlaybackPolicy.sequential(prefs.autoPlay, current.kind, next.kind, current.seriesId,
+                next.seriesId, current.season, current.episode, next.season, next.episode)) switchTo(index + 1)
+    }
+
+    private fun options() {
+        val choices = arrayOf("Retry playback", "Previous channel", "Picture size", "Audio track", "Subtitles / CC",
+            "Auto-play next episode: ${if (prefs.autoPlay) "On" else "Off"}", "Sleep timer",
+            if (host != null) "Stop sharing playback" else "Share playback with another TV",
+            if (following) "Stop following TV" else "Playback language preferences")
+        AlertDialog.Builder(this).setTitle("Playback options").setItems(choices) { _, which ->
+            when (which) {
+                0 -> engine?.retryManually()
+                1 -> switchTo(previous)
+                2 -> AlertDialog.Builder(this).setTitle("Picture size").setItems(arrayOf("Fit", "Stretch", "Zoom")) { _, n -> prefs.resizeMode = ratios[n]; b.playerView.resizeMode = ratios[n] }.show()
+                3 -> tracks(C.TRACK_TYPE_AUDIO, "Audio track")
+                4 -> { prefs.subtitleEnabled = !prefs.subtitleEnabled; engine?.player?.let { it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !prefs.subtitleEnabled).build() }; tracks(C.TRACK_TYPE_TEXT, "Subtitles / CC") }
+                5 -> { prefs.autoPlay = !prefs.autoPlay }
+                6 -> AlertDialog.Builder(this).setTitle("Stop playback after").setItems(arrayOf("Off", "15 minutes", "30 minutes", "60 minutes", "90 minutes")) { _, n ->
+                    handler.removeCallbacks(sleep)
+                    val mins = intArrayOf(0, 15, 30, 60, 90)[n]
+                    sleepAt = if (mins == 0) 0 else System.currentTimeMillis() + mins * 60_000L
+                    if (mins > 0) handler.postDelayed(sleep, mins * 60_000L)
+                }.show()
+                7 -> if (host != null) stopRoom() else startHost()
+                8 -> if (following) { stopRoom(); intent.removeExtra(EXTRA_ROOM_URL); intent.removeExtra(EXTRA_ROOM_TOKEN) } else languageOptions()
             }
-            .show()
+        }.show()
     }
 
-    private fun cycleAspect() {
-        resizeIndex = (resizeIndex + 1) % resizeModes.size
-        b.playerView.resizeMode = resizeModes[resizeIndex]
-        Toast.makeText(this, "Aspect: ${resizeLabels[resizeIndex]}", Toast.LENGTH_SHORT).show()
+    private fun languageOptions() {
+        val input = android.widget.EditText(this).apply { setText(prefs.audioLanguage); hint = "Language code, e.g. en, es (blank = automatic)" }
+        AlertDialog.Builder(this).setTitle("Preferred audio language").setView(input).setPositiveButton("Next") { _, _ ->
+            prefs.audioLanguage = input.text.toString().trim()
+            val sub = android.widget.EditText(this).apply { setText(prefs.subtitleLanguage); hint = "Subtitle language code" }
+            AlertDialog.Builder(this).setTitle("Preferred subtitle language").setView(sub).setPositiveButton("Save") { _, _ ->
+                prefs.subtitleLanguage = sub.text.toString().trim()
+                engine?.player?.let { it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().setPreferredAudioLanguage(prefs.audioLanguage.ifBlank { null }).setPreferredTextLanguage(prefs.subtitleLanguage.ifBlank { null }).build() }
+            }.setNegativeButton("Cancel", null).show()
+        }.setNegativeButton("Cancel", null).show()
     }
 
-    private fun showTrackDialog(trackType: Int, title: String) {
-        val p = player ?: return
-        if (p.currentTracks.groups.none { it.type == trackType }) {
-            Toast.makeText(this, "No ${title.lowercase()} available", Toast.LENGTH_SHORT).show()
-            return
-        }
-        TrackSelectionDialogBuilder(this, title, p, trackType)
-            .setShowDisableOption(trackType == C.TRACK_TYPE_TEXT)
-            .build()
-            .show()
+    private fun tracks(type: Int, title: String) {
+        val p = engine?.player ?: return
+        if (p.currentTracks.groups.none { it.type == type }) { Toast.makeText(this, "No $title available", Toast.LENGTH_SHORT).show(); return }
+        TrackSelectionDialogBuilder(this, title, p, type).setShowDisableOption(type == C.TRACK_TYPE_TEXT).build().show()
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        return when (keyCode) {
-            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { switchBy(-1); true }
-            KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT -> { switchBy(1); true }
-            KeyEvent.KEYCODE_DPAD_UP -> { switchBy(-1); true }
-            KeyEvent.KEYCODE_DPAD_DOWN -> { switchBy(1); true }
-            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_BUTTON_Y -> { openOptions(); true }
-            KeyEvent.KEYCODE_CAPTIONS -> { showTrackDialog(C.TRACK_TYPE_TEXT, "Subtitles / CC"); true }
-            KeyEvent.KEYCODE_INFO -> { currentChannel()?.let { showInfo(it) }; true }
-            else -> super.onKeyDown(keyCode, event)
+        when (keyCode) {
+            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_BUTTON_Y -> { options(); return true }
+            KeyEvent.KEYCODE_INFO -> { showInfo(); return true }
+            KeyEvent.KEYCODE_CAPTIONS -> { tracks(C.TRACK_TYPE_TEXT, "Subtitles / CC"); return true }
+            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { switchTo((index - 1 + queue.size) % queue.size.coerceAtLeast(1)); return true }
+            KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT -> { switchTo((index + 1) % queue.size.coerceAtLeast(1)); return true }
+            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> if (!following && !b.optionsButton.hasFocus() && b.retryButton.visibility != View.VISIBLE && !b.playerView.isControllerFullyVisible && engine?.channel?.isVod == false) {
+                switchTo((index + (if (keyCode == KeyEvent.KEYCODE_DPAD_UP) -1 else 1) + queue.size) % queue.size.coerceAtLeast(1)); return true
+            }
+            KeyEvent.KEYCODE_BACK -> if (b.playerView.isControllerFullyVisible) { b.playerView.hideController(); return true }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
+    private fun windowStart(): Long? {
+        val p = engine?.player ?: return null
+        if (p.currentTimeline.isEmpty) return null
+        return p.currentTimeline.getWindow(p.currentMediaItemIndex, Timeline.Window()).windowStartTimeMs.takeIf { it != C.TIME_UNSET }
+    }
+
+    private fun startHost() {
+        AlertDialog.Builder(this).setTitle("Share playback on your local network?")
+            .setMessage("Paired TVs receive this stream's address and credentials. Only pair TVs you trust. Live synchronization is best effort unless the stream includes program time.")
+            .setNegativeButton("Cancel", null).setPositiveButton("Start sharing") { _, _ ->
+                stopRoom()
+                val server = RoomSyncServer()
+                runCatching { server.start() }.onFailure { Toast.makeText(this, "Unable to start sharing", Toast.LENGTH_LONG).show(); return@setPositiveButton }
+                host = server
+                val addresses = runCatching { NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }.filter { !it.isLoopbackAddress && it is java.net.Inet4Address }.joinToString("\n") { "http://${it.hostAddress}:8091" } }.getOrDefault("TV LAN address, port 8091")
+                AlertDialog.Builder(this).setTitle("Pair another TV").setMessage("$addresses\nCode: ${server.code}\nCode expires after 10 minutes. Sharing stops when you leave playback.").setPositiveButton("Done", null).show()
+                roomJob = lifecycleScope.launch {
+                    while (isActive) {
+                        val p = engine?.player
+                        val ch = engine?.channel
+                        if (p != null && ch != null) server.publish(RoomState(ch, p.currentPosition, p.playWhenReady, System.currentTimeMillis(), windowStart()?.plus(p.currentPosition)))
+                        delay(1000)
+                    }
+                }
+            }.show()
+    }
+
+    private fun startFollowing() {
+        val url = intent.getStringExtra(EXTRA_ROOM_URL) ?: return
+        val token = intent.getStringExtra(EXTRA_ROOM_TOKEN) ?: return
+        following = true
+        b.playerView.useController = false
+        roomJob = lifecycleScope.launch {
+            val client = runCatching { RoomSyncClient(url) }.getOrElse {
+                b.errorText.text = "Invalid host address. Stop following in Options, then pair again."
+                b.errorText.visibility = View.VISIBLE
+                return@launch
+            }
+            var failures = 0
+            while (isActive) {
+                try {
+                    val state = withContext(Dispatchers.IO) { client.state(token) }
+                    failures = 0
+                    if (engine?.channel != state.channel) {
+                        queue = listOf(state.channel); index = 0
+                        ContentRepository.remember(queue)
+                        queueKey = ContentRepository.createQueue(this@PlayerActivity, queue)
+                        engine?.play(state.channel, 0, state.playing)
+                        showInfo()
+                    }
+                    val target = RoomSyncMath.targetPosition(state, System.currentTimeMillis(), windowStart())
+                    engine?.player?.let { p ->
+                        if (target != null && p.isCurrentMediaItemSeekable && RoomSyncMath.needsSeek(p.currentPosition, target)) p.seekTo(target.coerceAtLeast(0))
+                        p.playWhenReady = state.playing
+                    }
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    failures++
+                    if (failures >= 3) {
+                        engine?.player?.pause()
+                        b.errorText.text = "Connection to host lost. Open Options to stop following, then pair again."
+                        b.errorText.visibility = View.VISIBLE
+                        break
+                    }
+                }
+                delay(1500)
+            }
         }
     }
 
-    private fun saveResume() {
-        val ch = currentChannel() ?: return
-        val p = player ?: return
-        if (ch.id.startsWith("movie_") || ch.id.startsWith("ep_")) {
-            prefs.setResumePosition(ch.id, p.currentPosition)
-        }
+    private fun stopRoom() { roomJob?.cancel(); roomJob = null; host?.stop(); host = null; following = false; b.playerView.useController = true }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        engine?.let { position = it.player.currentPosition; playing = it.player.playWhenReady; it.save() }
+        outState.putString(EXTRA_QUEUE, queueKey)
+        outState.putInt(EXTRA_INDEX, index)
+        outState.putInt("previous", previous)
+        outState.putLong("position", position ?: 0)
+        outState.putBoolean("playing", playing)
+        outState.putLong("sleepAt", sleepAt)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onStop() {
+        engine?.let { position = it.player.currentPosition; playing = it.player.playWhenReady }
+        stopRoom()
+        handler.removeCallbacksAndMessages(null)
+        b.playerView.player = null
+        engine?.release(); engine = null
         super.onStop()
-        saveResume()
-        player?.release()
-        player = null
     }
 
     companion object {
         const val EXTRA_IDS = "ids"
+        const val EXTRA_QUEUE = "queue"
         const val EXTRA_INDEX = "index"
+        const val EXTRA_ROOM_URL = "room_url"
+        const val EXTRA_ROOM_TOKEN = "room_token"
     }
 }

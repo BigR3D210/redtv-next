@@ -3,7 +3,8 @@ package com.redtv.app.net
 import android.util.Xml
 import com.redtv.app.model.EpgProgram
 import org.xmlpull.v1.XmlPullParser
-import java.io.StringReader
+import java.io.InputStream
+import java.util.TimeZone
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -13,11 +14,15 @@ import java.util.Locale
  */
 object EpgParser {
 
-    fun parse(xml: String): Map<String, List<EpgProgram>> {
+    fun parse(xml: String): Map<String, List<EpgProgram>> = parse(xml.byteInputStream())
+
+    fun parse(input: InputStream): Map<String, List<EpgProgram>> {
+        val now = System.currentTimeMillis()
+        var retained = 0
         val result = HashMap<String, MutableList<EpgProgram>>()
         val parser = Xml.newPullParser()
         parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, false)
-        parser.setInput(StringReader(xml))
+        parser.setInput(input, null)
 
         var event = parser.eventType
         var channelId: String? = null
@@ -55,7 +60,8 @@ object EpgParser {
                         "title", "desc" -> current = null
                         "programme" -> {
                             val cid = channelId
-                            if (cid != null && start > 0) {
+                            if (cid != null && stop > start && stop >= now - 86400000L && start <= now + 7 * 86400000L && retained < 250000) {
+                                retained++
                                 result.getOrPut(cid) { ArrayList() }
                                     .add(EpgProgram(cid, title ?: "", start, stop, desc))
                             }
@@ -69,15 +75,16 @@ object EpgParser {
         return result
     }
 
-    private val fmt = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US)
-    private val fmtNoTz = SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
+    private fun fmt() = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US).apply { isLenient = false; timeZone = TimeZone.getTimeZone("UTC") }
+    private fun fmtNoTz() = SimpleDateFormat("yyyyMMddHHmmss", Locale.US).apply { isLenient = false; timeZone = TimeZone.getTimeZone("UTC") }
 
     private fun parseTime(raw: String?): Long {
         if (raw.isNullOrBlank()) return 0L
         val s = raw.trim()
         return runCatching {
-            if (s.length > 14 && (s.contains('+') || s.contains('-'))) fmt.parse(s)!!.time
-            else fmtNoTz.parse(s.take(14))!!.time
+            if (s.length > 14 && (s.contains('+') || s.contains('-'))) fmt().parse(s)!!.time
+            else fmtNoTz().parse(s.take(14))!!.time
         }.getOrDefault(0L)
     }
 }
+

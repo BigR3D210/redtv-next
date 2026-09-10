@@ -2,6 +2,8 @@ package com.redtv.app.net
 
 import com.redtv.app.model.Channel
 import com.redtv.app.model.Section
+import com.redtv.app.data.Identity
+import java.net.URLDecoder
 
 /** Parses M3U / M3U8 playlists and classifies each entry into a section by its group name. */
 object M3uParser {
@@ -38,6 +40,11 @@ object M3uParser {
                     val grp = line.substringAfter(":", "").trim()
                     if (grp.isNotEmpty() && pending != null) pending = pending.copy(group = grp)
                 }
+                line.startsWith("#EXTVLCOPT:", true) -> {
+                    val key = line.substringAfter(":").substringBefore("=").lowercase()
+                    val header = when(key) { "http-user-agent" -> "User-Agent"; "http-referrer", "http-referer" -> "Referer"; else -> null }
+                    if(header != null) pending = pending?.let { it.copy(headers = it.headers + (header to line.substringAfter("="))) }
+                }
                 line.startsWith("#") -> {}
                 else -> {
                     val p = pending
@@ -45,9 +52,10 @@ object M3uParser {
                         val group = p.group.ifBlank { "Uncategorized" }
                         out.add(
                             Channel(
-                                id = (p.tvgId?.takeIf { it.isNotBlank() } ?: "ch_$idx"),
+                                id = "m3u_${Identity.hash(line)}",
                                 name = p.name.ifBlank { "Channel ${idx + 1}" },
-                                streamUrl = line,
+                                streamUrl = line.substringBefore('|'),
+                                headers = p.headers + parseHeaders(line.substringAfter('|', "")),
                                 logoUrl = p.logo,
                                 category = group,
                                 epgChannelId = p.tvgId,
@@ -63,12 +71,19 @@ object M3uParser {
         return out
     }
 
-    private data class Pending(val name: String, val tvgId: String?, val logo: String?, val group: String)
+    private fun parseHeaders(raw: String): Map<String,String> = raw.split('&').mapNotNull {
+        val key = it.substringBefore('='); if(!it.contains('=') || !key.matches(Regex("[A-Za-z-]+"))) null
+        else key to runCatching { URLDecoder.decode(it.substringAfter('='), "UTF-8") }.getOrDefault("")
+    }.toMap()
+
+    private data class Pending(val name: String, val tvgId: String?, val logo: String?, val group: String, val headers: Map<String,String> = emptyMap())
 
     private fun parseExtInf(line: String): Pending {
         val attrs = HashMap<String, String>()
         attrRegex.findAll(line).forEach { attrs[it.groupValues[1].lowercase()] = it.groupValues[2] }
-        val name = line.substringAfterLast(",", "").trim()
+        var quoted = false
+        val comma = line.indexOfFirst { c -> if (c == '"') quoted = !quoted; c == ',' && !quoted }
+        val name = if(comma >= 0) line.substring(comma + 1).trim() else ""
         return Pending(
             name = if (name.isNotBlank()) name else (attrs["tvg-name"] ?: ""),
             tvgId = attrs["tvg-id"],
@@ -77,3 +92,4 @@ object M3uParser {
         )
     }
 }
+

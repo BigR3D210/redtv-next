@@ -60,7 +60,7 @@ class SetupActivity : AppCompatActivity() {
         b.btnBack2.setOnClickListener { showStep(1) }
         b.btnTest.setOnClickListener { startTest() }
 
-        b.btnBack3.setOnClickListener { showStep(2) }
+        b.btnBack3.setOnClickListener { candidate = null; showStep(2) }
         b.btnFinish.setOnClickListener { commit() }
         b.btnSaveAnyway.setOnClickListener { commit() }
     }
@@ -164,9 +164,10 @@ class SetupActivity : AppCompatActivity() {
     }
 
     private fun commit() {
-        val cand = candidate ?: buildCandidate() ?: return
-        prefs.hideDuplicates = b.switchDedup.isChecked
+        val cand = buildCandidate() ?: return
         prefs.upsertProfile(cand)
+        prefs.hideDuplicates = b.switchDedup.isChecked
+        ContentRepository.dirty = true
         startActivity(Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         finish()

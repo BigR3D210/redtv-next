@@ -1,0 +1,9 @@
+# Room sync contract
+
+Host playback explicitly starts `RoomSyncServer(port = 8091)`, displays `code` and local LAN URL, calls `start()`, then `publish(RoomState(channel, positionMs, playing, capturedAtEpochMs, programTimeMs))` about every second. Stop on player exit. Pairing expires after 10 minutes; bearer tokens expire after 8 hours and stop revokes all. `programTimeMs` is absolute programme time at the published position, or null. Never include a live-window-relative position as absolute time.
+
+Follower background worker calls `RoomSyncClient(baseUrl).pair(code): String`, then `state(token): RoomState` every 1–2 seconds. Both methods block: never call on main thread. Channel includes source credentials and headers and is shared only after explicit LAN pairing. UI must explain this. Client has `lastRoundTripMs` and adjusts capturedAtEpochMs to the follower clock from server response time. Fail closed on errors; stop following after repeated failures.
+
+`RoomSyncMath.targetPosition(state, now, followerWindowStartEpochMs)` returns VOD position, absolute-program-time aligned live position when both sides have a timeline, or null for untimed live (best effort: play same channel at default live edge). `needsSeek(current,target)` uses 1500ms threshold. Playback pause/play follows host. Host is authoritative; follower controls should disconnect or clearly be temporary. Decoder startup, network jitter and programme time quality prevent frame-perfect claims.
+
+Root UI: request a host URL and six-digit code with a LAN credential-sharing explanation; pair off main thread and pass URL/token to player integration chosen by player owner. No new manifest components are required by networking classes. Editor existing Activity launches a persisted PlayerActivity queue for direct media handoff.

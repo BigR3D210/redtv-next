@@ -37,7 +37,7 @@ class CategoryAdapter(
         holder.text.text = items[position]
         holder.text.isSelected = position == selectedIndex
         holder.text.setOnClickListener { select(position) }
-        holder.text.setOnFocusChangeListener { _, hasFocus -> if (hasFocus) select(position) }
+        holder.text.onFocusChangeListener = null
     }
 
     private fun select(position: Int) {
