@@ -49,7 +49,7 @@ object ContentRepository {
     fun restore(prefs: Prefs): Boolean = synchronized(lock) {
         val profile = prefs.activeProfile()
         if(profile == null) { generation++; provider = ""; assign(emptyList()); currentEpisodes = emptyList(); epg = emptyMap(); config = null; return@synchronized false }
-        val snap = runCatching { gson.fromJson(store?.read("catalog_${Identity.hash(profile.id)}"), Snapshot::class.java) }.getOrNull()
+        val snap = runCatching { store?.let { CatalogCache(it).read("catalog_v2_${Identity.hash(profile.id)}") } }.getOrNull()
         if(provider != profile.id) { generation++; provider = profile.id; assign(emptyList()); currentEpisodes = emptyList(); epg = emptyMap(); config = null }
         if(snap == null || snap.profile != profile) { generation++; assign(emptyList()); currentEpisodes = emptyList(); epg = emptyMap(); config = null; return@synchronized false }
         config = snap.config; assign(snap.channels); remembered.putAll(snap.episodes.associateBy { it.id }); currentEpisodes = snap.episodes
@@ -57,7 +57,10 @@ object ContentRepository {
     }
     private fun persist(profile: SourceProfile) {
         val cfg = config ?: return
-        store?.write("catalog_${Identity.hash(profile.id)}", gson.toJson(Snapshot(profile,cfg,allChannels(),remembered.values.filter { it.providerId == profile.id })))
+        store?.let {
+            CatalogCache(it).write("catalog_v2_${Identity.hash(profile.id)}", CatalogCache.Catalog(profile,cfg,allChannels(),remembered.values.filter { ch -> ch.providerId == profile.id }))
+            it.remove("catalog_${Identity.hash(profile.id)}")
+        }
     }
     fun remember(channels: List<Channel>) = synchronized(lock) {
         channels.forEach { remembered[it.id] = it }
