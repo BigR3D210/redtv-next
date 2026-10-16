@@ -1,4 +1,6 @@
-# Red TV Next b3
+# Red TV Next playback and sharing update
+
+Locally tested as build 103. Published release numbers follow the GitHub build run.
 
 - Faster channel opening: reuse the loaded catalog and save compact playback queues.
 - Playback recovery for prolonged buffering, decoder fallback, and renewed retry budget after stable playback.
