@@ -7,6 +7,7 @@ class PlaybackPolicy {
     private var retries = 0
     fun begin() { canRecord = false; retries = 0 }
     fun ready() { canRecord = true }
+    fun stable() { retries = 0 }
     fun retryDelay(): Long? = if (retries < 3) (1_000L shl retries++) else null
 
     companion object {

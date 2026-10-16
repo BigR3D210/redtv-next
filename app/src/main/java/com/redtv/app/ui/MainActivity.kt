@@ -40,6 +40,32 @@ class MainActivity : AppCompatActivity() {
     private var loadGeneration = 0
     private var focusedId: String? = null
     private var resumeRefresh = false
+    private var previewJob: Job? = null
+    private var previewEngine: PlaybackEngine? = null
+    private fun stopPreview() {
+        previewJob?.cancel(); previewJob=null
+        b.previewPlayer.player=null
+        previewEngine?.release(); previewEngine=null
+        b.previewBox.visibility=View.GONE
+    }
+    private fun preview(ch: Channel?) {
+        stopPreview()
+        if(!prefs.channelPreview || ch == null || ch.kind != ContentKind.LIVE) return
+        previewJob=lifecycleScope.launch {
+            delay(700)
+            b.previewBox.visibility=View.VISIBLE
+            val now=ContentRepository.nowAndNext(ch.epgChannelId).first?.title
+            val title=listOfNotNull(ch.name,now).joinToString("\n")
+            b.previewTitle.text=title
+            val engine=PlaybackEngine(this@MainActivity,prefs,{ message ->
+                b.previewTitle.text=if(message == null) title else "$title\n$message"
+            },recordHistory=false)
+            previewEngine=engine
+            engine.player.volume=0f
+            b.previewPlayer.player=engine.player
+            engine.play(ch)
+        }
+    }
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if(uri != null) {
             runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -56,7 +82,7 @@ class MainActivity : AppCompatActivity() {
         section=state?.getString("section") ?: Section.LIVE
         category=state?.getString("category") ?: "All"
         focusedId=state?.getString("focus")
-        adapter=ChannelAdapter(prefs,{ch,_->openItem(ch)},::contextMenu)
+        adapter=ChannelAdapter(prefs,{ch,_->openItem(ch)},::contextMenu,::preview)
         b.channelGrid.layoutManager=GridLayoutManager(this,4)
         b.channelGrid.adapter=adapter
         b.categoryList.layoutManager=LinearLayoutManager(this)
@@ -70,10 +96,21 @@ class MainActivity : AppCompatActivity() {
         b.btnSources.setOnClickListener { sources() }
         b.btnGuide.setOnClickListener { startActivity(Intent(this,GuideActivity::class.java)) }
         b.search.addTextChangedListener(object:TextWatcher {
-            override fun afterTextChanged(s:Editable?) { applyFilter(true) }
+            override fun afterTextChanged(s:Editable?) { applyFilter(true,s?.toString().orEmpty()) }
             override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int) {}
             override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int) {}
         })
+        b.search.setOnEditorActionListener { _, action, event ->
+            if(action==android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || event?.keyCode==android.view.KeyEvent.KEYCODE_ENTER) {
+                applyFilter()
+                (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(b.search.windowToken,0)
+                b.channelGrid.requestFocus()
+                true
+            } else false
+        }
+        b.search.setOnFocusChangeListener { _, focused ->
+            if(focused) stopPreview() else applyFilter()
+        }
         load()
     }
     override fun onResume() {
@@ -82,7 +119,7 @@ class MainActivity : AppCompatActivity() {
         if(ContentRepository.dirty) {ContentRepository.dirty=false;load()}
         else if(resumeRefresh) { rebuildCategories();resumeRefresh=false }
     }
-    override fun onPause() { resumeRefresh=true;super.onPause() }
+    override fun onPause() { stopPreview();resumeRefresh=true;super.onPause() }
     override fun onSaveInstanceState(out:Bundle) {
         out.putString("section",section);out.putString("category",category);out.putString("focus",focusedId)
         super.onSaveInstanceState(out)
@@ -126,26 +163,24 @@ class MainActivity : AppCompatActivity() {
         (b.channelGrid.layoutManager as GridLayoutManager).spanCount=if(section==Section.MOVIES || section==Section.SERIES)5 else 4
         applyFilter()
     }
-    private fun applyFilter(debounce:Boolean=false) {
+    private fun applyFilter(debounce:Boolean=false,searchText:String=b.search.text.toString()) {
         filterJob?.cancel()
-        val selectedSection=section;val selectedCategory=category;val query=b.search.text.toString().trim()
+        val selectedSection=section;val selectedCategory=category;val query=searchText.trim()
         filterJob=lifecycleScope.launch {
             if(debounce)delay(180)
             val result=withContext(Dispatchers.Default) {
-                val history=prefs.historyChannels()
-                val all=(catalog+history).distinctBy {it.id}
-                val favorites=prefs.favorites()
+                val history=if(query.isBlank()) prefs.historyChannels() else emptyList()
                 val hidden=prefs.hidden()
-                var items=when(selectedSection) {
-                    "fav" -> all.filter {it.id in favorites}
-                    "hidden" -> all.filter {it.id in hidden}
+                var items=if(query.isNotBlank()) prefs.searchChannels(catalog,query) else when(selectedSection) {
+                    "fav" -> {val favorites=prefs.favorites();(catalog+history).distinctBy {it.id}.filter {it.id in favorites}}
+                    "hidden" -> (catalog+history).distinctBy {it.id}.filter {it.id in hidden}
                     "history" -> history
                     "continue" -> {val ids=prefs.continueIds().toSet();history.filter {it.id in ids}}
                     else -> catalog.filter {it.section==selectedSection}
                 }
                 if(selectedSection!="hidden")items=items.filterNot {it.id in hidden}
                 items=if(selectedSection=="history" || selectedSection=="continue") items.map {prefs.displayChannel(it)} else prefs.orderedChannels(items)
-                items=items.filter {(selectedCategory=="All" || it.category==selectedCategory) && (query.isBlank() || it.name.contains(query,true) || it.category.contains(query,true))}
+                items=items.filter {(query.isNotBlank() || selectedCategory=="All" || it.category==selectedCategory) && (query.isBlank() || it.name.contains(query,true) || it.category.contains(query,true))}
                 if(prefs.hideDuplicates && selectedSection!="hidden")items=items.distinctBy {it.name.lowercase()}
                 items
             }
@@ -156,7 +191,7 @@ class MainActivity : AppCompatActivity() {
                     if(position>=0){b.channelGrid.scrollToPosition(position);b.channelGrid.post {b.channelGrid.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus()}}
                 }
             })
-            if(result.isEmpty())showEmpty(when(selectedSection) {
+            if(result.isEmpty())showEmpty(if(query.isNotBlank()) "No matches for \"$query\" in your library." else when(selectedSection) {
                 "hidden" -> "No hidden channels. Long-press OK on a channel to manage it."
                 "history" -> "Your watch history appears here after playback starts."
                 "continue" -> "Movies and episodes in progress will appear here."
@@ -191,6 +226,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun playItems(items:List<Channel>,index:Int,multi:Int=0) {
         if(items.isEmpty())return
+        stopPreview()
         lifecycleScope.launch {
             val key=withContext(Dispatchers.IO){ContentRepository.createQueue(this@MainActivity,items)}
             startActivity(Intent(this@MainActivity,if(multi>0)MultiViewActivity::class.java else PlayerActivity::class.java)
@@ -244,9 +280,10 @@ class MainActivity : AppCompatActivity() {
         }}.show()
     }
     private fun playbackPreferences() {
-        val checked=booleanArrayOf(prefs.autoPlay,prefs.subtitleEnabled,prefs.hideDuplicates)
-        AlertDialog.Builder(this).setTitle("Playback preferences").setMultiChoiceItems(arrayOf("Autoplay the next episode","Enable subtitles when available","Hide duplicate channel names"),checked){_,i,value->
-            when(i){0->prefs.autoPlay=value;1->prefs.subtitleEnabled=value;2->prefs.hideDuplicates=value}
+        stopPreview()
+        val checked=booleanArrayOf(prefs.autoPlay,prefs.subtitleEnabled,prefs.hideDuplicates,prefs.channelPreview)
+        AlertDialog.Builder(this).setTitle("Playback preferences").setMultiChoiceItems(arrayOf("Autoplay the next episode","Enable subtitles when available","Hide duplicate channel names","Muted channel preview when highlighted"),checked){_,i,value->
+            when(i){0->prefs.autoPlay=value;1->prefs.subtitleEnabled=value;2->prefs.hideDuplicates=value;3->prefs.channelPreview=value}
         }.setPositiveButton("Done"){_,_->applyFilter()}.show()
     }
     private fun multiview() {

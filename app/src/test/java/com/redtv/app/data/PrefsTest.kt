@@ -32,6 +32,15 @@ class PrefsTest {
         prefs.activeProfileId = "a"
         assertTrue(prefs.isFavorite("live_12"))
     }
+    @Test fun searchFindsOtherSectionsAndCustomNamesAndRejectsUnrelatedChannels() {
+        val sports=Channel("s","ESPN","https://example.test/s",section=Section.SPORTS)
+        val news=Channel("n","News","https://example.test/n",section=Section.LIVE)
+        val items=listOf(sports,news)
+        assertEquals(listOf(sports),prefs.searchChannels(items," espn "))
+        assertTrue(prefs.searchChannels(items,"zzzxxx").isEmpty())
+        prefs.setChannelName(news.id,"Local ESPN news")
+        assertEquals(items,prefs.searchChannels(items,"ESPN"))
+    }
     @Test fun resumeIsIndependentBetweenProviders() {
         prefs.activeProfileId = "a"
         prefs.setResumePosition("movie_12", 45000)

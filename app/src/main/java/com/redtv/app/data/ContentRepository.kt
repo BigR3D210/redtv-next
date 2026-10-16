@@ -28,6 +28,8 @@ object ContentRepository {
     private var generation = 0L
     private var index: Map<String,Channel> = emptyMap()
     private val remembered = linkedMapOf<String,Channel>()
+    private var launchQueueKey: String? = null
+    private data class QueueSnapshot(val ids: List<String>, val extra: List<Channel>)
     private data class Snapshot(val profile: SourceProfile, val config: RemoteConfig, val channels: List<Channel>, val episodes: List<Channel>)
     fun initialize(context: Context) = synchronized(lock) {
         if(store == null) {
@@ -35,7 +37,7 @@ object ContentRepository {
             runCatching { gson.fromJson(store?.read("remembered"),Array<Channel>::class.java) }.getOrNull()?.forEach { remembered[it.id] = it }
         }
     }
-    fun hasAny() = allChannels().isNotEmpty()
+    fun hasAny() = live.isNotEmpty() || movies.isNotEmpty() || sports.isNotEmpty() || series.isNotEmpty()
     fun allChannels(): List<Channel> = live + movies + sports + series
     fun sectionItems(section: String) = when(section) { Section.MOVIES -> movies; Section.SERIES -> series; Section.SPORTS -> sports; else -> live }
     fun categoriesFor(section: String) = sectionItems(section).map { it.category }.distinct().sortedBy { it.lowercase() }
@@ -69,15 +71,23 @@ object ContentRepository {
     }
     fun createQueue(context: Context, items: List<Channel>): String = synchronized(lock) {
         initialize(context); val key = UUID.randomUUID().toString(); launchQueue = items.toList()
-        store?.write("queue_$key",gson.toJson(items))
+        // Catalog entries already have an encrypted snapshot. Only persist their IDs here.
+        store?.write("queue2_$key",gson.toJson(QueueSnapshot(items.map { it.id },items.filter { index[it.id] != it })))
+        launchQueueKey = key
         val keys = runCatching { gson.fromJson(store?.read("queue_index"),Array<String>::class.java)?.toList().orEmpty() }.getOrDefault(emptyList()) + key
-        keys.dropLast(20).forEach { if(it.matches(Regex("[a-fA-F0-9-]{36}"))) store?.remove("queue_$it") }
-        store?.write("queue_index",gson.toJson(keys.takeLast(20))); items.forEach { remembered[it.id] = it }; key
+        keys.dropLast(20).forEach { if(it.matches(Regex("[a-fA-F0-9-]{36}"))) { store?.remove("queue_$it"); store?.remove("queue2_$it") } }
+        store?.write("queue_index",gson.toJson(keys.takeLast(20))); items.filter { it.id !in index }.forEach { remembered[it.id] = it }; key
     }
     fun readQueue(context: Context, key: String): List<Channel> = synchronized(lock) {
         initialize(context)
         if(!key.matches(Regex("[a-fA-F0-9-]{36}"))) return@synchronized emptyList()
-        runCatching { gson.fromJson(store?.read("queue_$key"), Array<Channel>::class.java)?.toList().orEmpty() }.getOrDefault(emptyList()).also { launchQueue = it; it.forEach { ch -> remembered[ch.id] = ch } }
+        if(key == launchQueueKey) return@synchronized launchQueue
+        val snapshot=runCatching { gson.fromJson(store?.read("queue2_$key"),QueueSnapshot::class.java) }.getOrNull()
+        if(snapshot!=null) {
+            val extra=snapshot.extra.associateBy { it.id }
+            return@synchronized snapshot.ids.mapNotNull { extra[it] ?: index[it] }.also { launchQueue=it;launchQueueKey=key }
+        }
+        runCatching { gson.fromJson(store?.read("queue_$key"), Array<Channel>::class.java)?.toList().orEmpty() }.getOrDefault(emptyList()).also { launchQueue = it; launchQueueKey=key; it.forEach { ch -> remembered[ch.id] = ch } }
     }
     suspend fun reload(prefs: Prefs) = withContext(Dispatchers.IO) {
         val profile = prefs.activeProfile() ?: error("No source configured")

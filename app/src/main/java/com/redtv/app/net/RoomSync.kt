@@ -23,7 +23,26 @@ object RoomSyncMath {
     }
     fun needsSeek(current: Long, target: Long) = abs(current - target) > 1500
 }
+object RoomAddress {
+    fun normalize(input: String): String {
+        val value=input.trim().trimEnd('/')
+        val uri=URI(if(value.contains("://")) value else "http://$value")
+        require(uri.scheme == "http" && uri.host != null && uri.userInfo == null && uri.rawQuery == null && uri.rawFragment == null && uri.path.orEmpty().isEmpty())
+        val p=uri.host.split('.').map { it.toIntOrNull() ?: -1 }
+        require(p.size == 4 && p.all { it in 0..255 } && (p[0] == 10 || (p[0] == 192 && p[1] == 168) || (p[0] == 172 && p[1] in 16..31)))
+        require(uri.port == -1 || uri.port in 1..65535)
+        return "http://${uri.host}:${if(uri.port == -1) 8091 else uri.port}"
+    }
+}
 class RoomSyncServer(port: Int = 8091) : NanoHTTPD(port) {
+    companion object {
+        fun startAvailable(preferredPort: Int = 8091): RoomSyncServer {
+            val preferred=RoomSyncServer(preferredPort)
+            try { preferred.start(); return preferred }
+            catch (_: java.io.IOException) { preferred.stop() }
+            return RoomSyncServer(0).also { it.start() }
+        }
+    }
     val code = LanAuth.newCode()
     private val auth = LanAuth(code)
     private val gson = Gson()
@@ -50,17 +69,12 @@ class RoomSyncServer(port: Int = 8091) : NanoHTTPD(port) {
         }
     } catch (_: Exception) { reply(Response.Status.BAD_REQUEST, "{}") }
     private fun reply(status: Response.Status, body: String) = newFixedLengthResponse(status, "application/json", body).apply {
+        addHeader("Connection", "close")
         addHeader("Cache-Control", "no-store"); addHeader("X-Content-Type-Options", "nosniff")
     }
 }
 class RoomSyncClient(baseUrl: String) {
-    private val base = baseUrl.trim().trimEnd('/').also {
-        val uri = URI(it)
-        require(uri.scheme == "http" && uri.host != null && uri.userInfo == null && uri.rawQuery == null && uri.rawFragment == null && uri.path.orEmpty().isEmpty())
-        // Explicit private IPv4 addresses only: no public hosts, DNS rebinding, or scanning.
-        val p = uri.host.split('.').map { n -> n.toIntOrNull() ?: -1 }
-        require(p.size == 4 && p.all { n -> n in 0..255 } && (p[0] == 10 || (p[0] == 192 && p[1] == 168) || (p[0] == 172 && p[1] in 16..31)))
-    }
+    private val base = RoomAddress.normalize(baseUrl)
     private val http = OkHttpClient.Builder().connectTimeout(3, TimeUnit.SECONDS).readTimeout(3, TimeUnit.SECONDS).followRedirects(false).build()
     private val gson = Gson()
     var lastRoundTripMs: Long = 0; private set

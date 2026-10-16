@@ -59,7 +59,9 @@ class PlayerActivity : AppCompatActivity() {
         b.retryButton.setOnClickListener { engine?.retryManually() }
         b.optionsButton.setOnClickListener { options() }
         ContentRepository.initialize(this)
-        ContentRepository.restore(prefs)
+        // The library is already loaded when opening a channel from the browser.
+        // Re-reading and decrypting it here blocks the first video frame.
+        if (!ContentRepository.hasAny() && !intent.hasExtra(EXTRA_ROOM_URL)) ContentRepository.restore(prefs)
         queueKey = savedInstanceState?.getString(EXTRA_QUEUE) ?: intent.getStringExtra(EXTRA_QUEUE)
         queue = queueKey?.let { ContentRepository.readQueue(this, it) }.orEmpty()
         if (queue.isEmpty()) queue = intent.getStringArrayListExtra(EXTRA_IDS).orEmpty().mapNotNull { ContentRepository.channelById(it) }
@@ -88,6 +90,13 @@ class PlayerActivity : AppCompatActivity() {
             if (b.retryButton.visibility == View.VISIBLE) b.retryButton.requestFocus()
         }, ::onEnded)
         b.playerView.player = engine?.player
+        b.playerView.controllerShowTimeoutMs = 3500
+        b.playerView.setControllerVisibilityListener(androidx.media3.ui.PlayerView.ControllerVisibilityListener { visibility ->
+            b.optionsButton.visibility = visibility
+            if (visibility != View.VISIBLE && b.optionsButton.hasFocus()) b.playerView.requestFocus()
+        })
+        b.playerView.requestFocus()
+        b.optionsButton.visibility=if(b.playerView.isControllerFullyVisible) View.VISIBLE else View.GONE
         b.playerView.resizeMode = prefs.resizeMode
         if (queue.isNotEmpty()) playCurrent(position)
         if (sleepAt > 0) handler.postDelayed(sleep, (sleepAt - System.currentTimeMillis()).coerceAtLeast(0))
@@ -197,10 +206,14 @@ class PlayerActivity : AppCompatActivity() {
             .setMessage("Paired TVs receive this stream's address and credentials. Only pair TVs you trust. Live synchronization is best effort unless the stream includes program time.")
             .setNegativeButton("Cancel", null).setPositiveButton("Start sharing") { _, _ ->
                 stopRoom()
-                val server = RoomSyncServer()
-                runCatching { server.start() }.onFailure { Toast.makeText(this, "Unable to start sharing", Toast.LENGTH_LONG).show(); return@setPositiveButton }
+                val server = runCatching { RoomSyncServer.startAvailable() }.getOrElse {
+                    Toast.makeText(this, "Unable to start sharing. Check your local network connection.", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
                 host = server
-                val addresses = runCatching { NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }.filter { !it.isLoopbackAddress && it is java.net.Inet4Address }.joinToString("\n") { "http://${it.hostAddress}:8091" } }.getOrDefault("TV LAN address, port 8091")
+                val addresses = runCatching { NetworkInterface.getNetworkInterfaces().toList().flatMap { it.inetAddresses.toList() }.filter { !it.isLoopbackAddress && it is java.net.Inet4Address }.mapNotNull { address ->
+                    runCatching { com.redtv.app.net.RoomAddress.normalize("http://${address.hostAddress}:${server.listeningPort}") }.getOrNull()
+                }.distinct().joinToString("\n") }.getOrDefault("TV LAN address, port ${server.listeningPort}")
                 AlertDialog.Builder(this).setTitle("Pair another TV").setMessage("$addresses\nCode: ${server.code}\nCode expires after 10 minutes. Sharing stops when you leave playback.").setPositiveButton("Done", null).show()
                 roomJob = lifecycleScope.launch {
                     while (isActive) {
@@ -238,20 +251,21 @@ class PlayerActivity : AppCompatActivity() {
                     }
                     val target = RoomSyncMath.targetPosition(state, System.currentTimeMillis(), windowStart())
                     engine?.player?.let { p ->
-                        if (target != null && p.isCurrentMediaItemSeekable && RoomSyncMath.needsSeek(p.currentPosition, target)) p.seekTo(target.coerceAtLeast(0))
+                        // Seeking on every poll while still buffering can prevent startup entirely.
+                        if (target != null && p.playbackState == androidx.media3.common.Player.STATE_READY && p.isCurrentMediaItemSeekable && RoomSyncMath.needsSeek(p.currentPosition, target)) p.seekTo(target.coerceAtLeast(0))
                         p.playWhenReady = state.playing
+                        if(p.playbackState == androidx.media3.common.Player.STATE_READY) b.errorText.visibility=View.GONE
                     }
                 } catch (e: Exception) {
                     if (e is kotlinx.coroutines.CancellationException) throw e
                     failures++
                     if (failures >= 3) {
                         engine?.player?.pause()
-                        b.errorText.text = "Connection to host lost. Open Options to stop following, then pair again."
+                        b.errorText.text = "Reconnecting to the host TV… Menu opens Options to stop following."
                         b.errorText.visibility = View.VISIBLE
-                        break
                     }
                 }
-                delay(1500)
+                delay(if(failures >= 3) 5000 else 1500)
             }
         }
     }

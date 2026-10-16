@@ -12,7 +12,7 @@
         android:layout_height="36dp"
         android:layout_marginStart="32dp"
         android:layout_marginTop="20dp"
-        android:src="@mipmap/ic_launcher"
+        android:src="@drawable/redtv_brand"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
@@ -103,9 +103,36 @@
         android:layout_marginTop="14dp"
         android:clipToPadding="false"
         android:paddingBottom="24dp"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/previewBox"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/sectionList" />
+
+    <LinearLayout
+        android:id="@+id/previewBox"
+        android:layout_width="180dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="24dp"
+        android:layout_marginBottom="24dp"
+        android:orientation="vertical"
+        android:visibility="gone"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent">
+        <androidx.media3.ui.PlayerView
+            android:id="@+id/previewPlayer"
+            android:layout_width="match_parent"
+            android:layout_height="101dp"
+            android:focusable="false"
+            app:use_controller="false"
+            app:show_buffering="when_playing"
+            app:surface_type="texture_view" />
+        <TextView
+            android:id="@+id/previewTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="3"
+            android:textSize="12sp"
+            android:textColor="@color/text_primary" />
+    </LinearLayout>
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/channelGrid"

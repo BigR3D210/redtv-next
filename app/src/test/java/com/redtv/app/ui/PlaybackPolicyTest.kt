@@ -4,6 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PlaybackPolicyTest {
+    @Test fun sustainedPlaybackRestoresRecoveryBudget() {
+        val policy=PlaybackPolicy()
+        repeat(3) { assertNotNull(policy.retryDelay()) }
+        assertNull(policy.retryDelay())
+        policy.stable()
+        assertEquals(1000L,policy.retryDelay())
+    }
     @Test fun retryBudgetStopsEvenIfAnUnstableStreamBrieflyBecameReady() {
         val policy = PlaybackPolicy()
         repeat(3) { assertNotNull(policy.retryDelay()); policy.ready() }

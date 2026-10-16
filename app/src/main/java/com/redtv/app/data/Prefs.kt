@@ -38,6 +38,9 @@ class Prefs(context: Context, private val store: TextStore = PrivateStore(contex
     var autoPlay: Boolean
         get() = sp.getBoolean("autoplay",false)
         set(v) { sp.edit().putBoolean("autoplay",v).apply() }
+    var channelPreview: Boolean
+        get() = sp.getBoolean("channel_preview", false)
+        set(v) { sp.edit().putBoolean("channel_preview", v).apply() }
     var resizeMode: Int
         get() = sp.getInt("resize",0)
         set(v) { sp.edit().putInt("resize",v).apply() }
@@ -108,6 +111,11 @@ class Prefs(context: Context, private val store: TextStore = PrivateStore(contex
     fun setChannelName(id: String,name: String) = override("names",id,name)
     fun setChannelCategory(id: String,category: String) = override("groups",id,category)
     fun displayChannel(ch: Channel) = ch.copy(name=overrides("names")[ch.id] ?: ch.name,category=overrides("groups")[ch.id] ?: ch.category)
+    fun searchChannels(channels: List<Channel>, query: String): List<Channel> {
+        val names=overrides("names"); val groups=overrides("groups")
+        val text=query.trim()
+        return channels.filter { (names[it.id] ?: it.name).contains(text,true) || (groups[it.id] ?: it.category).contains(text,true) }
+    }
     fun setChannelOrder(ids: List<String>) { saveList("order",ids.distinct()); sortMode="custom" }
     fun moveChannel(id: String,delta: Int,visibleIds: List<String>) {
         val ids=visibleIds.toMutableList(); val from=ids.indexOf(id); if(from<0)return

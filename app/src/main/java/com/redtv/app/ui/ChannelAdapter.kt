@@ -15,7 +15,8 @@ import com.redtv.app.model.Channel
 
 data class ChannelRow(val channel:Channel,val favorite:Boolean,val subtitle:String)
 
-class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->Unit,private val onLongPress:(Channel)->Unit):
+class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->Unit,private val onLongPress:(Channel)->Unit,
+                     private val onFocus:(Channel?)->Unit = {}):
     ListAdapter<ChannelRow,ChannelAdapter.VH>(object:DiffUtil.ItemCallback<ChannelRow>() {
         override fun areItemsTheSame(a:ChannelRow,b:ChannelRow)=a.channel.id==b.channel.id
         override fun areContentsTheSame(a:ChannelRow,b:ChannelRow)=a==b
@@ -64,6 +65,7 @@ class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->
         holder.itemView.contentDescription=ch.name+", "+row.subtitle
         holder.itemView.setOnClickListener {if(holder.bindingAdapterPosition!=androidx.recyclerview.widget.RecyclerView.NO_POSITION)onClick(ch,holder.bindingAdapterPosition)}
         holder.itemView.setOnLongClickListener {onLongPress(ch);true}
+        holder.itemView.setOnFocusChangeListener { _, focused -> onFocus(if(focused) ch else null) }
     }
 }
 

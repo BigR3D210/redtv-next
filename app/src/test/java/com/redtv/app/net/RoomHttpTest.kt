@@ -10,6 +10,15 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RoomHttpTest {
+    @Test fun occupiedPortFallsBackToAvailablePort() {
+        java.net.ServerSocket(0).use { occupied ->
+            val server=RoomSyncServer.startAvailable(occupied.localPort)
+            try {
+                assertTrue(server.listeningPort > 0)
+                assertNotEquals(occupied.localPort,server.listeningPort)
+            } finally { server.stop() }
+        }
+    }
     @Test fun stateRequiresPairingAndPostAndNeverReturnsTokenInUrl() {
         val server = RoomSyncServer(0)
         server.start()
