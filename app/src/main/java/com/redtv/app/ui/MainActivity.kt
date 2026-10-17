@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Toast
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -290,6 +291,7 @@ class MainActivity : AppCompatActivity() {
         val items=prefs.orderedChannels(catalog).filter {it.kind==ContentKind.LIVE && !prefs.isHidden(it.id)}
         if(items.size<2){toast("Add at least two live channels first.");return}
         val chosen=linkedSetOf<String>()
+        val count=TextView(this).apply {text="0 selected • Press RIGHT from any channel to reach Watch";setPadding(16,8,16,8)}
         val search=EditText(this).apply {hint="Filter channels"}
         val list=android.widget.ListView(this).apply {choiceMode=android.widget.ListView.CHOICE_MODE_MULTIPLE}
         var visible=items
@@ -305,12 +307,27 @@ class MainActivity : AppCompatActivity() {
         })
         list.setOnItemClickListener {_,_,i,_->val id=visible[i].id
             if(id in chosen)chosen.remove(id) else if(chosen.size<4)chosen.add(id) else {list.setItemChecked(i,false);toast("Choose up to four channels.")}
+            count.text="${chosen.size} selected • Press RIGHT from any channel to reach Watch"
         }
         update()
-        val box=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;addView(search);addView(list,LinearLayout.LayoutParams(-1,320))}
+        val box=LinearLayout(this).apply {orientation=LinearLayout.VERTICAL;addView(count);addView(search);addView(list,LinearLayout.LayoutParams(-1,320))}
         val dialog=AlertDialog.Builder(this).setTitle("Multiview • choose 2–4 channels").setView(box)
             .setPositiveButton("Watch",null).setNegativeButton("Cancel",null).create()
-        dialog.setOnShowListener {dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+        dialog.setOnShowListener {
+            val watch=dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            list.setOnKeyListener {_,key,event ->
+                if(key==android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                    if(event.action==android.view.KeyEvent.ACTION_DOWN)watch.requestFocus()
+                    true
+                } else false
+            }
+            watch.setOnKeyListener {_,key,event ->
+                if(key==android.view.KeyEvent.KEYCODE_DPAD_UP) {
+                    if(event.action==android.view.KeyEvent.ACTION_DOWN)list.requestFocus()
+                    true
+                } else false
+            }
+            watch.setOnClickListener {
             if(chosen.size<2)toast("Choose at least two channels.") else {
                 val selected=chosen.mapNotNull {id->items.firstOrNull {it.id==id}}
                 dialog.dismiss();playItems(selected,0,if(selected.size==2)2 else 4)

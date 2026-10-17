@@ -10,6 +10,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RoomHttpTest {
+    @Test fun browserLandingPageExplainsReceiverWithoutExposingPairingCode() {
+        val server=RoomSyncServer(0)
+        server.start()
+        try {
+            OkHttpClient().newCall(Request.Builder().url("http://127.0.0.1:${server.listeningPort}/").build()).execute().use {
+                assertEquals(200,it.code)
+                val body=it.body!!.string()
+                assertTrue(body.contains("Watch Red TV on Laptop"))
+                assertFalse(body.contains(server.code))
+            }
+        } finally {server.stop()}
+    }
     @Test fun occupiedPortFallsBackToAvailablePort() {
         java.net.ServerSocket(0).use { occupied ->
             val server=RoomSyncServer.startAvailable(occupied.localPort)

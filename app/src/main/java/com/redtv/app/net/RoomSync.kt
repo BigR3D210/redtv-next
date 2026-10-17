@@ -51,6 +51,17 @@ class RoomSyncServer(port: Int = 8091) : NanoHTTPD(port) {
     override fun stop() { auth.clear(); state = null; super.stop() }
     override fun serve(session: IHTTPSession): Response = try {
         when {
+            session.uri == "/" && session.method == Method.GET -> newFixedLengthResponse(Response.Status.OK, "text/html", """
+                <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+                <title>Red TV sharing</title><body style="background:#141414;color:#fff;font:20px system-ui;max-width:680px;margin:60px auto;padding:24px">
+                <h1>Watch Red TV on your laptop</h1>
+                <p>This address connects a paired player to your TV. Video does not play directly in this browser page.</p>
+                <ol><li>Open <strong>Watch Red TV on Laptop.cmd</strong> in your Red TV project folder.</li>
+                <li>Enter the complete TV address and the six-digit code shown on the TV.</li>
+                <li>Choose <strong>Watch on laptop</strong>. VLC opens the video.</li></ol>
+                <p>Keep both devices on the same home network and leave the TV playing. Live video timing may differ between screens.</p>
+                <p>On another TV, use Red TV Next → Tools → Join a TV instead.</p></body></html>
+            """.trimIndent()).apply {addHeader("Cache-Control","no-store");addHeader("X-Content-Type-Options","nosniff")}
             session.uri == "/pair" && session.method == Method.POST -> {
                 val length = session.headers["content-length"]?.toIntOrNull()
                 if (length == null || length !in 1..128 || session.headers.containsKey("transfer-encoding")) reply(Response.Status.BAD_REQUEST, "{}")
