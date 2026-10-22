@@ -113,7 +113,8 @@ object ContentRepository {
     suspend fun refreshEpg(prefs: Prefs) = withContext(Dispatchers.IO) {
         val profile = prefs.activeProfile() ?: return@withContext
         val state = synchronized(lock) { if(provider != profile.id) null else config?.let { it to generation } } ?: return@withContext
-        val url = state.first.source.epgUrl
+        val source=state.first.source
+        val url = source.epgUrl?.takeIf {it.isNotBlank()} ?: if(source.isXtream())XtreamClient.guideUrl(source) else null
         val data = if(url.isNullOrBlank()) emptyMap() else Http.withStream(url,state.first.userAgent ?: Http.userAgent) { EpgParser.parse(it) }
         currentCoroutineContext().ensureActive()
         synchronized(lock) { if(provider == profile.id && prefs.activeProfile() == profile && generation == state.second) epg = data }

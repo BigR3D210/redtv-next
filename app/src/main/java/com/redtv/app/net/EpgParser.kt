@@ -31,6 +31,8 @@ object EpgParser {
         var title: String? = null
         var desc: String? = null
         var current: String? = null
+        var live=false
+        var repeat=false
 
         while (event != XmlPullParser.END_DOCUMENT) {
             when (event) {
@@ -40,8 +42,10 @@ object EpgParser {
                             channelId = parser.getAttributeValue(null, "channel")
                             start = parseTime(parser.getAttributeValue(null, "start"))
                             stop = parseTime(parser.getAttributeValue(null, "stop"))
-                            title = null; desc = null
+                            title = null; desc = null; live=false; repeat=false
                         }
+                        "live" -> live=true
+                        "previously-shown" -> repeat=true
                         "title" -> current = "title"
                         "desc" -> current = "desc"
                     }
@@ -63,7 +67,7 @@ object EpgParser {
                             if (cid != null && stop > start && stop >= now - 86400000L && start <= now + 7 * 86400000L && retained < 250000) {
                                 retained++
                                 result.getOrPut(cid) { ArrayList() }
-                                    .add(EpgProgram(cid, title ?: "", start, stop, desc))
+                                    .add(EpgProgram(cid, title ?: "", start, stop, desc,live && !repeat,repeat))
                             }
                         }
                     }

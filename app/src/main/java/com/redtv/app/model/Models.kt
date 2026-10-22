@@ -88,5 +88,7 @@ data class EpgProgram(
     val title: String,
     val startMillis: Long,
     val stopMillis: Long,
-    val description: String? = null
+    val description: String? = null,
+    val isLive: Boolean = false,
+    val isRepeat: Boolean = false
 )

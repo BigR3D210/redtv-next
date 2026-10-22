@@ -20,6 +20,7 @@ import com.redtv.app.data.ContentRepository
 import com.redtv.app.data.Identity
 import com.redtv.app.data.Prefs
 import com.redtv.app.data.BrowseGroups
+import com.redtv.app.data.SportsNow
 import com.redtv.app.databinding.ActivityMainBinding
 import com.redtv.app.model.*
 import com.redtv.app.net.RoomSyncClient
@@ -40,6 +41,8 @@ class MainActivity : AppCompatActivity() {
     private var loadJob: Job? = null
     private var filterJob: Job? = null
     private var categoryJob: Job? = null
+    private var sportsRefreshJob: Job? = null
+    private fun defaultCategory()=if(section==Section.SPORTS)SportsNow.LIVE_NOW else "All"
     private var loadGeneration = 0
     private var focusedId: String? = null
     private var resumeRefresh = false
@@ -83,7 +86,7 @@ class MainActivity : AppCompatActivity() {
         prefs=Prefs(this); ContentRepository.initialize(this)
         b=ActivityMainBinding.inflate(layoutInflater); setContentView(b.root)
         section=state?.getString("section") ?: Section.LIVE
-        category=state?.getString("category") ?: "All"
+        category=state?.getString("category") ?: defaultCategory()
         focusedId=state?.getString("focus")
         adapter=ChannelAdapter(prefs,{ch,_->openItem(ch)},::contextMenu,::preview)
         b.channelGrid.layoutManager=GridLayoutManager(this,4)
@@ -92,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         b.sectionList.layoutManager=LinearLayoutManager(this,LinearLayoutManager.HORIZONTAL,false)
         val tabs=CategoryAdapter(labels,R.layout.item_section) { index ->
             val selected=sections[index]
-            if(section!=selected) { section=selected;category="All";focusedId=null; rebuildCategories() }
+            if(section!=selected) { section=selected;category=defaultCategory();focusedId=null; rebuildCategories() }
         }
         b.sectionList.adapter=tabs; tabs.setSelected(sections.indexOf(section).coerceAtLeast(0))
         b.btnSettings.text="Tools";b.btnSettings.setOnClickListener { toolsMenu() }
@@ -121,8 +124,12 @@ class MainActivity : AppCompatActivity() {
         if(!::b.isInitialized)return
         if(ContentRepository.dirty) {ContentRepository.dirty=false;load()}
         else if(resumeRefresh) { rebuildCategories();resumeRefresh=false }
+        sportsRefreshJob?.cancel()
+        sportsRefreshJob=lifecycleScope.launch {
+            while(isActive){delay(30_000);if(section==Section.SPORTS && category==SportsNow.LIVE_NOW && b.search.text.isNullOrBlank())applyFilter()}
+        }
     }
-    override fun onPause() { stopPreview();resumeRefresh=true;super.onPause() }
+    override fun onPause() { sportsRefreshJob?.cancel();stopPreview();resumeRefresh=true;super.onPause() }
     override fun onSaveInstanceState(out:Bundle) {
         out.putString("section",section);out.putString("category",category);out.putString("focus",focusedId)
         super.onSaveInstanceState(out)
@@ -165,10 +172,11 @@ class MainActivity : AppCompatActivity() {
                     val hidden=prefs.hidden()
                     val items=prefs.browseChannels(prefs.displayChannels(snapshot.filter {it.section==selectedSection && it.id !in hidden}),selectedSection)
                     val groups=items.map {it.category}.distinct().sorted()
-                    listOf("All")+if(prefs.usFirst(selectedSection))groups.sortedBy {if(BrowseGroups.country(it)=="US")0 else 1} else groups
+                    val shortcuts=if(selectedSection==Section.SPORTS)listOf(SportsNow.LIVE_NOW,SportsNow.PPV,SportsNow.PROVIDER_LIVE,"All") else listOf("All")
+                    shortcuts+if(prefs.usFirst(selectedSection))groups.sortedBy {if(BrowseGroups.country(it)=="US")0 else 1} else groups
                 }
             }
-            if(category !in categories){category="All";applyFilter()}
+            if(category !in categories){category=defaultCategory();applyFilter()}
             val categoriesAdapter=CategoryAdapter(categories) {idx->
                 if(category!=categories[idx]){category=categories[idx];focusedId=null;applyFilter()}
             }
@@ -197,12 +205,23 @@ class MainActivity : AppCompatActivity() {
                 items=prefs.displayChannels(items)
                 if(query.isBlank()) {
                     if(selectedSection in sections.take(4))items=prefs.browseChannels(items,selectedSection)
-                    if(selectedCategory!="All")items=items.filter {it.category==selectedCategory}
+                    items=when {
+                        selectedSection==Section.SPORTS && selectedCategory==SportsNow.LIVE_NOW -> {
+                            val now=System.currentTimeMillis()
+                            items.filter {SportsNow.isLiveNow(it,ContentRepository.nowAndNext(it.epgChannelId).first,now)}
+                        }
+                        selectedSection==Section.SPORTS && selectedCategory==SportsNow.PPV -> items.filter {SportsNow.isPpv(it)}
+                        selectedSection==Section.SPORTS && selectedCategory==SportsNow.PROVIDER_LIVE -> items.filter {SportsNow.providerLive(it)}
+                        selectedCategory!="All" -> items.filter {it.category==selectedCategory}
+                        else -> items
+                    }
                 }
                 if(selectedSection!="history" && selectedSection!="continue")items=prefs.orderedChannels(items,selectedSection)
                 if(prefs.hideDuplicates && selectedSection!="hidden")items=items.distinctBy {it.name.lowercase()}
                 ensureActive()
-                items to adapter.prepareRows(items)
+                val rows=adapter.prepareRows(items)
+                items to if(selectedSection==Section.SPORTS && selectedCategory==SportsNow.LIVE_NOW && query.isBlank())
+                    rows.map {it.copy(subtitle=(if(SportsNow.isPpv(it.channel))"LIVE • PPV • " else "LIVE • ")+it.subtitle)} else rows
             }
             val result=prepared.first
             displayed=result;adapter.submitList(prepared.second,Runnable {
@@ -212,7 +231,8 @@ class MainActivity : AppCompatActivity() {
                     if(position>=0){b.channelGrid.scrollToPosition(position);b.channelGrid.post {b.channelGrid.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus()}}
                 }
             })
-            if(result.isEmpty())showEmpty(if(query.isNotBlank()) "No matches for \"$query\" in your library." else when(selectedSection) {
+            if(result.isEmpty())showEmpty(if(query.isNotBlank()) "No matches for \"$query\" in your library." else if(selectedSection==Section.SPORTS && category==SportsNow.LIVE_NOW)
+                "No live events confirmed by the guide right now. Try PPV / event channels or Provider live (unverified). Tools → Refresh library and guide updates listings." else when(selectedSection) {
                 "hidden" -> "No hidden channels. Long-press OK on a channel to manage it."
                 "history" -> "Your watch history appears here after playback starts."
                 "continue" -> "Movies and episodes in progress will appear here."
@@ -415,7 +435,7 @@ class MainActivity : AppCompatActivity() {
                 val profile=profiles[which]
                 AlertDialog.Builder(this).setTitle(profile.name).setItems(arrayOf("Use this source","Edit on TV","Delete source")){_,action->
                     when(action) {
-                        0->{prefs.activeProfileId=profile.id;category="All";load()}
+                        0->{prefs.activeProfileId=profile.id;category=defaultCategory();load()}
                         1->{prefs.activeProfileId=profile.id;ContentRepository.dirty=true;startActivity(Intent(this,SetupActivity::class.java))}
                         2->AlertDialog.Builder(this).setTitle("Delete ${profile.name}?").setPositiveButton("Delete"){_,_->prefs.deleteProfile(profile.id);load()}.setNegativeButton("Cancel",null).show()
                     }

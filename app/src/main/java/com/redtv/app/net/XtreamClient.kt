@@ -10,6 +10,10 @@ import java.net.URLEncoder
 
 /** Xtream Codes API client: Live (+ Sports split), Movies (VOD), and Series. */
 object XtreamClient {
+    fun guideUrl(source:Source):String {
+        val ctx=ctx(source,Http.userAgent)
+        return "${ctx.host}/xmltv.php?username=${enc(ctx.user)}&password=${enc(ctx.pass)}"
+    }
 
     private val sportsKeywords = listOf(
         "sport", "ppv", "pay per view", "pay-per-view", "espn", "dazn", "ufc", "nfl",
