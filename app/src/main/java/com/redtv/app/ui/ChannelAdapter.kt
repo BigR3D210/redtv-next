@@ -5,8 +5,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
-import androidx.recyclerview.widget.DiffUtil
-import androidx.recyclerview.widget.ListAdapter
+import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.redtv.app.R
 import com.redtv.app.data.ContentRepository
@@ -17,14 +16,25 @@ data class ChannelRow(val channel:Channel,val favorite:Boolean,val subtitle:Stri
 
 class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->Unit,private val onLongPress:(Channel)->Unit,
                      private val onFocus:(Channel?)->Unit = {}):
-    ListAdapter<ChannelRow,ChannelAdapter.VH>(object:DiffUtil.ItemCallback<ChannelRow>() {
-        override fun areItemsTheSame(a:ChannelRow,b:ChannelRow)=a.channel.id==b.channel.id
-        override fun areContentsTheSame(a:ChannelRow,b:ChannelRow)=a==b
-    }) {
+    RecyclerView.Adapter<ChannelAdapter.VH>() {
+    private var currentList:List<ChannelRow> = emptyList()
+    private fun getItem(position:Int)=currentList[position]
+    override fun getItemCount()=currentList.size
+    // Whole-library switches do not need move animations or expensive list diffs.
+    @android.annotation.SuppressLint("NotifyDataSetChanged")
+    fun submitList(rows:List<ChannelRow>,done:Runnable?=null) {
+        currentList=rows
+        notifyDataSetChanged()
+        done?.run()
+    }
     fun submit(items:List<Channel>,done:Runnable?=null) {
+        submitList(prepareRows(items),done)
+    }
+    /** Prepare off the UI thread for large library/search results. */
+    fun prepareRows(items:List<Channel>):List<ChannelRow> {
         val favorites=prefs.favorites()
         val history=prefs.watchHistory().associateBy {it.channel.id}
-        submitList(items.map {ch->
+        return items.map {ch->
             val entry=history[ch.id]
             val now=ContentRepository.nowAndNext(ch.epgChannelId).first
             val subtitle=when {
@@ -37,7 +47,7 @@ class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->
                 else -> ch.category
             }
             ChannelRow(ch,ch.id in favorites,subtitle)
-        },done)
+        }
     }
     fun currentIds()=ArrayList(currentList.map {it.channel.id})
     fun indexOfId(id:String)=currentList.indexOfFirst {it.channel.id==id}

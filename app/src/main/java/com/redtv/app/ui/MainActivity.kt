@@ -19,6 +19,7 @@ import com.redtv.app.R
 import com.redtv.app.data.ContentRepository
 import com.redtv.app.data.Identity
 import com.redtv.app.data.Prefs
+import com.redtv.app.data.BrowseGroups
 import com.redtv.app.databinding.ActivityMainBinding
 import com.redtv.app.model.*
 import com.redtv.app.net.RoomSyncClient
@@ -38,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private var catalog = emptyList<Channel>()
     private var loadJob: Job? = null
     private var filterJob: Job? = null
+    private var categoryJob: Job? = null
     private var loadGeneration = 0
     private var focusedId: String? = null
     private var resumeRefresh = false
@@ -126,7 +128,7 @@ class MainActivity : AppCompatActivity() {
         super.onSaveInstanceState(out)
     }
     private fun load() {
-        loadJob?.cancel();filterJob?.cancel()
+        loadJob?.cancel();filterJob?.cancel();categoryJob?.cancel()
         val generation=++loadGeneration
         ContentRepository.dirty=false
         b.progress.visibility=View.VISIBLE
@@ -153,39 +155,57 @@ class MainActivity : AppCompatActivity() {
         }
     }
     private fun rebuildCategories() {
-        val items=prefs.orderedChannels(catalog.filter {it.section==section})
-        val categories=if(section in sections.take(4))listOf("All")+items.map {it.category}.distinct().sorted() else listOf("All")
-        if(category !in categories)category="All"
-        val categoriesAdapter=CategoryAdapter(categories) {idx->
-            if(category!=categories[idx]){category=categories[idx];focusedId=null;applyFilter()}
-        }
-        categoriesAdapter.setSelected(categories.indexOf(category))
-        b.categoryList.adapter=categoriesAdapter
+        categoryJob?.cancel()
+        val selectedSection=section;val snapshot=catalog
         (b.channelGrid.layoutManager as GridLayoutManager).spanCount=if(section==Section.MOVIES || section==Section.SERIES)5 else 4
         applyFilter()
+        categoryJob=lifecycleScope.launch {
+            val categories=withContext(Dispatchers.Default) {
+                if(selectedSection !in sections.take(4))listOf("All") else {
+                    val hidden=prefs.hidden()
+                    val items=prefs.browseChannels(prefs.displayChannels(snapshot.filter {it.section==selectedSection && it.id !in hidden}),selectedSection)
+                    val groups=items.map {it.category}.distinct().sorted()
+                    listOf("All")+if(prefs.usFirst(selectedSection))groups.sortedBy {if(BrowseGroups.country(it)=="US")0 else 1} else groups
+                }
+            }
+            if(category !in categories){category="All";applyFilter()}
+            val categoriesAdapter=CategoryAdapter(categories) {idx->
+                if(category!=categories[idx]){category=categories[idx];focusedId=null;applyFilter()}
+            }
+            categoriesAdapter.setSelected(categories.indexOf(category))
+            b.categoryList.adapter=categoriesAdapter
+        }
     }
     private fun applyFilter(debounce:Boolean=false,searchText:String=b.search.text.toString()) {
         filterJob?.cancel()
+        stopPreview()
         val selectedSection=section;val selectedCategory=category;val query=searchText.trim()
+        val snapshot=catalog
         filterJob=lifecycleScope.launch {
             if(debounce)delay(180)
-            val result=withContext(Dispatchers.Default) {
-                val history=if(query.isBlank()) prefs.historyChannels() else emptyList()
+            val prepared=withContext(Dispatchers.Default) {
+                val history=if(query.isBlank() && selectedSection in listOf("fav","hidden","history","continue")) prefs.historyChannels() else emptyList()
                 val hidden=prefs.hidden()
-                var items=if(query.isNotBlank()) prefs.searchChannels(catalog,query) else when(selectedSection) {
-                    "fav" -> {val favorites=prefs.favorites();(catalog+history).distinctBy {it.id}.filter {it.id in favorites}}
-                    "hidden" -> (catalog+history).distinctBy {it.id}.filter {it.id in hidden}
+                var items=if(query.isNotBlank()) prefs.searchChannels(snapshot,query) else when(selectedSection) {
+                    "fav" -> {val favorites=prefs.favorites();(snapshot+history).distinctBy {it.id}.filter {it.id in favorites}}
+                    "hidden" -> (snapshot+history).distinctBy {it.id}.filter {it.id in hidden}
                     "history" -> history
                     "continue" -> {val ids=prefs.continueIds().toSet();history.filter {it.id in ids}}
-                    else -> catalog.filter {it.section==selectedSection}
+                    else -> snapshot.filter {it.section==selectedSection}
                 }
                 if(selectedSection!="hidden")items=items.filterNot {it.id in hidden}
-                items=if(selectedSection=="history" || selectedSection=="continue") items.map {prefs.displayChannel(it)} else prefs.orderedChannels(items)
-                items=items.filter {(query.isNotBlank() || selectedCategory=="All" || it.category==selectedCategory) && (query.isBlank() || it.name.contains(query,true) || it.category.contains(query,true))}
+                items=prefs.displayChannels(items)
+                if(query.isBlank()) {
+                    if(selectedSection in sections.take(4))items=prefs.browseChannels(items,selectedSection)
+                    if(selectedCategory!="All")items=items.filter {it.category==selectedCategory}
+                }
+                if(selectedSection!="history" && selectedSection!="continue")items=prefs.orderedChannels(items,selectedSection)
                 if(prefs.hideDuplicates && selectedSection!="hidden")items=items.distinctBy {it.name.lowercase()}
-                items
+                ensureActive()
+                items to adapter.prepareRows(items)
             }
-            displayed=result;adapter.submit(result,Runnable {
+            val result=prepared.first
+            displayed=result;adapter.submitList(prepared.second,Runnable {
                 val id=focusedId
                 if(id!=null && b.channelGrid.hasFocus()) {
                     val position=adapter.indexOfId(id)
@@ -246,17 +266,17 @@ class MainActivity : AppCompatActivity() {
                 2->prefs.toggleHidden(ch.id)
                 3->{textInput("Channel name",ch.name){prefs.setChannelName(ch.id,it);rebuildCategories()};return@setItems}
                 4->{textInput("Category",ch.category){prefs.setChannelCategory(ch.id,it);rebuildCategories()};return@setItems}
-                5->prefs.moveChannel(ch.id,-1,displayed.map {it.id})
-                6->prefs.moveChannel(ch.id,1,displayed.map {it.id})
+                5->{prefs.moveChannel(ch.id,-1,displayed.map {it.id});prefs.setSectionSort(section,"custom")}
+                6->{prefs.moveChannel(ch.id,1,displayed.map {it.id});prefs.setSectionSort(section,"custom")}
                 7->{if(!ch.isSeries)playItems(listOf(ch),0)}
                 8->prefs.removeHistory(ch.id)
                 9->{if(ch.isVod)prefs.recordPlayback(ch,0,0,true)}
-            };applyFilter()
+            };rebuildCategories()
         }.show()
     }
     private fun toolsMenu() {
-        val options=arrayOf("Open a link","Open a local video / USB","Edit from laptop or phone","Multiview","Join another TV","Sort channels",
-            "Refresh library and guide","Playback preferences","Clear watch history","Check for updates","About Red TV")
+        val options=arrayOf("Open a link","Open a local video / USB","Edit from laptop or phone","Multiview","Join another TV","Sort this section",
+            "Refresh library and guide","Playback preferences","Clear watch history","Check for updates","About Red TV","Hide groups from browsing")
         AlertDialog.Builder(this).setTitle("Your player").setItems(options){_,n->when(n) {
             0->textInput("Play a video link","https://"){url->
                 val parsed=runCatching {java.net.URI(url.trim())}.getOrNull()
@@ -270,15 +290,51 @@ class MainActivity : AppCompatActivity() {
             2->startActivity(Intent(this,EditOnLaptopActivity::class.java))
             3->multiview()
             4->joinRoom()
-            5->{val modes=listOf("custom","az","za","number","category");AlertDialog.Builder(this).setTitle("Sort channels")
-                .setSingleChoiceItems(arrayOf("My order / provider order","Name A–Z","Name Z–A","Channel number","Category"),modes.indexOf(prefs.sortMode)){d,i->prefs.sortMode=modes[i];d.dismiss();applyFilter()}.show()}
+            5->sortSection()
             6->load()
             7->playbackPreferences()
             8->AlertDialog.Builder(this).setTitle("Clear history for this source?").setMessage("This also clears its saved resume positions.")
                 .setPositiveButton("Clear"){_,_->prefs.clearHistory();applyFilter()}.setNegativeButton("Cancel",null).show()
             9->checkUpdate()
             10->AlertDialog.Builder(this).setTitle("Red TV • Your own player").setMessage("Free local player. No account, ads or subscription.\n\nLong-press OK to organize channels. Use Tools → Edit from laptop to manage them on your home network.\n\nMultiview and paired TVs use additional source connections. Device codecs and source permissions determine what plays.").setPositiveButton("OK",null).show()
+            11->browseSettings()
         }}.show()
+    }
+    private fun sortSection() {
+        val target=section
+        val modes=listOf("custom","az","za","number","category")
+        AlertDialog.Builder(this).setTitle("Sort ${labels[sections.indexOf(target)]}")
+            .setSingleChoiceItems(arrayOf("My order / provider order","Name A–Z","Name Z–A","Channel number","Category"),modes.indexOf(prefs.sectionSort(target))){d,i->
+                prefs.setSectionSort(target,modes[i]);d.dismiss();rebuildCategories()
+            }.setNeutralButton(if(prefs.usFirst(target))"US first: ON" else "US first: OFF"){_,_->
+                prefs.setUsFirst(target,!prefs.usFirst(target));rebuildCategories();sortSection()
+            }.setNegativeButton("Done",null).show()
+    }
+    private fun browseSettings() {
+        if(section !in sections.take(4)){toast("Select Live TV, Sports, Movies or Series first.");return}
+        val target=section
+        lifecycleScope.launch {
+            val groups=withContext(Dispatchers.Default) {prefs.displayChannels(catalog.filter {it.section==target}).map {it.category}.distinct().sorted()}
+            val countries=groups.map {BrowseGroups.country(it)}.filter {it.isNotBlank()}.distinct().sorted()
+            val options=arrayOf("Hide countries","Hide individual groups","Show all groups")
+            AlertDialog.Builder(this@MainActivity).setTitle("Browsing: ${labels[sections.indexOf(target)]}").setItems(options){_,choice->
+                if(choice==2){prefs.showAllBrowseGroups(target);rebuildCategories();return@setItems}
+                val values=if(choice==0)countries else groups
+                val hidden=(if(choice==0)prefs.browseCountries(target) else prefs.browseGroups(target)).toMutableSet()
+                AlertDialog.Builder(this@MainActivity).setTitle("Checked = hidden from browsing • RIGHT → Done")
+                    .setMultiChoiceItems(values.toTypedArray(),values.map {it in hidden}.toBooleanArray()){_,i,checked->
+                        if(checked)hidden.add(values[i]) else hidden.remove(values[i])
+                        if(choice==0)prefs.setBrowseCountries(target,hidden) else prefs.setBrowseGroupHidden(target,values[i],checked)
+                    }.setPositiveButton("Done"){_,_->rebuildCategories()}.setOnCancelListener {rebuildCategories()}.show().also {dialog->
+                        dialog.listView.setOnKeyListener {_,key,event->
+                            if(key==android.view.KeyEvent.KEYCODE_DPAD_RIGHT) {
+                                if(event.action==android.view.KeyEvent.ACTION_DOWN)dialog.getButton(AlertDialog.BUTTON_POSITIVE).requestFocus()
+                                true
+                            } else false
+                        }
+                    }
+            }.show()
+        }
     }
     private fun playbackPreferences() {
         stopPreview()

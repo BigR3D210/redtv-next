@@ -47,6 +47,27 @@ class PrefsTest {
         prefs.activeProfileId = "b"
         assertEquals(0L, prefs.resumePosition("movie_12"))
     }
+    @Test fun browseCountryRulesDoNotRemoveSearchResults() {
+        val au=Channel("au","News Australia","https://example.test/a",category="AU| AUSTRALIA")
+        val us=Channel("us","News US","https://example.test/u",category="US| NEWS")
+        assertEquals("US",BrowseGroups.country("AT&T ᴿᴬᵂ"))
+        assertEquals("US",BrowseGroups.country("USA: SPORTS"))
+        assertEquals(listOf(us),prefs.browseChannels(listOf(au,us),Section.LIVE))
+        assertEquals(listOf(au,us),prefs.searchChannels(listOf(au,us),"News"))
+        prefs.setBrowseGroupHidden(Section.LIVE,us.category,true)
+        assertTrue(prefs.browseChannels(listOf(us),Section.LIVE).isEmpty())
+        assertEquals(listOf(us),prefs.browseChannels(listOf(us),Section.SPORTS))
+    }
+    @Test fun sectionSortAndUsPriorityPersistIndependently() {
+        prefs.setSectionSort(Section.SPORTS,"za")
+        assertEquals("za",prefs.sectionSort(Section.SPORTS))
+        assertEquals("custom",prefs.sectionSort(Section.LIVE))
+        val ca=Channel("ca","A","https://example.test/a",category="CA| NEWS")
+        val us=Channel("us","Z","https://example.test/u",category="US| NEWS")
+        assertEquals(listOf(us,ca),prefs.orderedChannels(listOf(ca,us),Section.LIVE))
+        prefs.activeProfileId="other"
+        assertEquals("custom",prefs.sectionSort(Section.SPORTS))
+    }
     @Test fun episodeHistorySurvivesCatalogRemovalAndCompletionClearsResume() {
         prefs.activeProfileId="a"
         val episode=Channel("a:ep_1","Episode one","https://example.test/1",kind=ContentKind.EPISODE)

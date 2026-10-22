@@ -56,6 +56,20 @@ class Prefs(context: Context, private val store: TextStore = PrivateStore(contex
     var sortMode: String
         get() = sp.getString(scope("sort"),"custom").orEmpty()
         set(v) { sp.edit().putString(scope("sort"),v).apply() }
+    fun sectionSort(section:String)=sp.getString(scope("sort_$section"),sortMode).orEmpty()
+    fun setSectionSort(section:String,mode:String) {sp.edit().putString(scope("sort_$section"),mode).apply()}
+    fun usFirst(section:String)=sp.getBoolean(scope("us_first_$section"),section==Section.LIVE || section==Section.SPORTS)
+    fun setUsFirst(section:String,value:Boolean) {sp.edit().putBoolean(scope("us_first_$section"),value).apply()}
+    fun browseCountries(section:String):Set<String> = sp.getStringSet(scope("browse_countries_$section"),
+        if(section==Section.LIVE || section==Section.SPORTS)setOf("AU","CA") else emptySet()).orEmpty().toSet()
+    fun setBrowseCountries(section:String,values:Set<String>) {sp.edit().putStringSet(scope("browse_countries_$section"),values.toSet()).apply()}
+    fun browseGroups(section:String):Set<String> = set("browse_groups_$section")
+    fun setBrowseGroupHidden(section:String,group:String,hidden:Boolean)=changeSet("browse_groups_$section",group,hidden)
+    fun showAllBrowseGroups(section:String) {setBrowseCountries(section,emptySet());sp.edit().remove(scope("browse_groups_$section")).apply()}
+    fun browseChannels(channels:List<Channel>,section:String):List<Channel> {
+        val countries=browseCountries(section);val groups=browseGroups(section)
+        return channels.filter {it.category !in groups && BrowseGroups.country(it.category) !in countries}
+    }
     private fun set(key: String) = HashSet(sp.getStringSet(scope(key),emptySet()) ?: emptySet())
     private fun changeSet(key: String,id: String,value: Boolean) = synchronized(lock) {
         val values = set(key); if(value) values.add(id) else values.remove(id)
@@ -111,6 +125,11 @@ class Prefs(context: Context, private val store: TextStore = PrivateStore(contex
     fun setChannelName(id: String,name: String) = override("names",id,name)
     fun setChannelCategory(id: String,category: String) = override("groups",id,category)
     fun displayChannel(ch: Channel) = ch.copy(name=overrides("names")[ch.id] ?: ch.name,category=overrides("groups")[ch.id] ?: ch.category)
+    fun displayChannels(channels:List<Channel>):List<Channel> {
+        val names=overrides("names");val groups=overrides("groups")
+        if(names.isEmpty() && groups.isEmpty())return channels
+        return channels.map {if(it.id in names || it.id in groups)it.copy(name=names[it.id] ?: it.name,category=groups[it.id] ?: it.category) else it}
+    }
     fun searchChannels(channels: List<Channel>, query: String): List<Channel> {
         val names=overrides("names"); val groups=overrides("groups")
         val text=query.trim()
@@ -122,18 +141,18 @@ class Prefs(context: Context, private val store: TextStore = PrivateStore(contex
         val to=(from+delta).coerceIn(0,ids.lastIndex); ids.removeAt(from); ids.add(to,id)
         setChannelOrder(ids+list("order").filterNot { it in ids })
     }
-    fun orderedChannels(list: List<Channel>): List<Channel> {
-        val names=overrides("names"); val groups=overrides("groups")
-        val items=list.map { it.copy(name=names[it.id] ?: it.name,category=groups[it.id] ?: it.category) }
-        val sorted=when(sortMode) {
+    fun orderedChannels(list: List<Channel>,section:String?=null): List<Channel> {
+        val items=displayChannels(list)
+        var sorted=when(if(section==null)sortMode else sectionSort(section)) {
             "az" -> items.sortedBy { it.name.lowercase() }
             "za" -> items.sortedByDescending { it.name.lowercase() }
             "number" -> items.sortedBy { it.number ?: Int.MAX_VALUE }
             "category" -> items.sortedWith(compareBy({it.category.lowercase()},{it.name.lowercase()}))
-            else -> {val ranks=this.list("order").withIndex().associate {it.value to it.index};items.sortedBy {ranks[it.id] ?: Int.MAX_VALUE}}
+            else -> {val ranks=this.list("order").withIndex().associate {it.value to it.index};if(ranks.isEmpty())items else items.sortedBy {ranks[it.id] ?: Int.MAX_VALUE}}
         }
+        if(section!=null && usFirst(section))sorted=sorted.sortedBy {if(BrowseGroups.country(it.category)=="US")0 else 1}
         val pins=pinned().withIndex().associate {it.value to it.index}
-        return sorted.sortedBy {pins[it.id] ?: Int.MAX_VALUE}
+        return if(pins.isEmpty())sorted else sorted.sortedBy {pins[it.id] ?: Int.MAX_VALUE}
     }
     var cachedConfig: RemoteConfig?
         get() = decode(store.read(privateKey("config")))
