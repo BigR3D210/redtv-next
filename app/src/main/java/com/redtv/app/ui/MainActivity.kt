@@ -15,6 +15,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.core.view.doOnNextLayout
+import androidx.lifecycle.Lifecycle
 import com.redtv.app.R
 import com.redtv.app.data.ContentRepository
 import com.redtv.app.data.Identity
@@ -45,18 +47,24 @@ class MainActivity : AppCompatActivity() {
     private fun defaultCategory()=if(section==Section.SPORTS)SportsNow.LIVE_NOW else "All"
     private var loadGeneration = 0
     private var focusedId: String? = null
+    private var returnFocusPending=false
+    private var previewChannelId:String?=null
     private var resumeRefresh = false
     private var previewJob: Job? = null
     private var previewEngine: PlaybackEngine? = null
     private fun stopPreview() {
+        previewChannelId=null
         previewJob?.cancel(); previewJob=null
         b.previewPlayer.player=null
         previewEngine?.release(); previewEngine=null
         b.previewBox.visibility=View.GONE
     }
     private fun preview(ch: Channel?) {
+        if(!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || !hasWindowFocus())return
+        if(ch!=null && previewChannelId==ch.id && (previewEngine!=null || previewJob?.isActive==true))return
         stopPreview()
         if(!prefs.channelPreview || ch == null || ch.kind != ContentKind.LIVE) return
+        previewChannelId=ch.id
         previewJob=lifecycleScope.launch {
             delay(700)
             b.previewBox.visibility=View.VISIBLE
@@ -70,6 +78,21 @@ class MainActivity : AppCompatActivity() {
             engine.player.volume=0f
             b.previewPlayer.player=engine.player
             engine.play(ch)
+        }
+    }
+    private fun channelFocused(ch:Channel?) {
+        if(ch!=null){focusedId=ch.id;preview(ch)}
+        else b.channelGrid.post {if(!b.channelGrid.hasFocus())stopPreview()}
+    }
+    private fun previewFocusedTile() {
+        val view=currentFocus ?: return
+        val holder=b.channelGrid.findContainingViewHolder(view) ?: return
+        adapter.channelAt(holder.bindingAdapterPosition)?.let {channelFocused(it)}
+    }
+    override fun onWindowFocusChanged(hasFocus:Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if(::b.isInitialized) {
+            if(hasFocus)b.channelGrid.post {previewFocusedTile()} else stopPreview()
         }
     }
     private val openFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -88,7 +111,7 @@ class MainActivity : AppCompatActivity() {
         section=state?.getString("section") ?: Section.LIVE
         category=state?.getString("category") ?: defaultCategory()
         focusedId=state?.getString("focus")
-        adapter=ChannelAdapter(prefs,{ch,_->openItem(ch)},::contextMenu,::preview)
+        adapter=ChannelAdapter(prefs,{ch,_->openItem(ch)},::contextMenu,::channelFocused)
         b.channelGrid.layoutManager=GridLayoutManager(this,4)
         b.channelGrid.adapter=adapter
         b.categoryList.layoutManager=LinearLayoutManager(this)
@@ -186,7 +209,6 @@ class MainActivity : AppCompatActivity() {
     }
     private fun applyFilter(debounce:Boolean=false,searchText:String=b.search.text.toString()) {
         filterJob?.cancel()
-        stopPreview()
         val selectedSection=section;val selectedCategory=category;val query=searchText.trim()
         val snapshot=catalog
         filterJob=lifecycleScope.launch {
@@ -224,13 +246,25 @@ class MainActivity : AppCompatActivity() {
                     rows.map {it.copy(subtitle=(if(SportsNow.isPpv(it.channel))"LIVE • PPV • " else "LIVE • ")+it.subtitle)} else rows
             }
             val result=prepared.first
-            displayed=result;adapter.submitList(prepared.second,Runnable {
-                val id=focusedId
-                if(id!=null && b.channelGrid.hasFocus()) {
-                    val position=adapter.indexOfId(id)
-                    if(position>=0){b.channelGrid.scrollToPosition(position);b.channelGrid.post {b.channelGrid.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus()}}
+            val restoreFocus=returnFocusPending || b.channelGrid.hasFocus()
+            val id=focusedId
+            displayed=result;adapter.submitList(prepared.second)
+            if(restoreFocus && result.isNotEmpty()) {
+                val position=adapter.indexOfId(id.orEmpty()).takeIf {it>=0} ?: 0
+                b.channelGrid.doOnNextLayout {
+                    if(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                        b.channelGrid.findViewHolderForAdapterPosition(position)?.itemView?.requestFocus()
+                        returnFocusPending=false
+                        previewFocusedTile()
+                    }
                 }
-            })
+                b.channelGrid.scrollToPosition(position)
+                b.channelGrid.requestLayout()
+            } else if(result.isEmpty() && returnFocusPending) {
+                returnFocusPending=false
+                b.categoryList.post {b.categoryList.getChildAt(0)?.requestFocus() ?: b.search.requestFocus()}
+            }
+            if(previewChannelId!=null && result.none {it.id==previewChannelId})stopPreview()
             if(result.isEmpty())showEmpty(if(query.isNotBlank()) "No matches for \"$query\" in your library." else if(selectedSection==Section.SPORTS && category==SportsNow.LIVE_NOW)
                 "No live events confirmed by the guide right now. Try PPV / event channels or Provider live (unverified). Tools → Refresh library and guide updates listings." else when(selectedSection) {
                 "hidden" -> "No hidden channels. Long-press OK on a channel to manage it."
@@ -267,6 +301,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun playItems(items:List<Channel>,index:Int,multi:Int=0) {
         if(items.isEmpty())return
+        returnFocusPending=true
         stopPreview()
         lifecycleScope.launch {
             val key=withContext(Dispatchers.IO){ContentRepository.createQueue(this@MainActivity,items)}

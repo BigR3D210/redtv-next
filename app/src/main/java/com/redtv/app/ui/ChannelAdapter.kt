@@ -18,6 +18,9 @@ class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->
                      private val onFocus:(Channel?)->Unit = {}):
     RecyclerView.Adapter<ChannelAdapter.VH>() {
     private var currentList:List<ChannelRow> = emptyList()
+    init {setHasStableIds(true)}
+    override fun getItemId(position:Int):Long = currentList[position].channel.id.fold(-3750763034362895579L){hash,char->(hash xor char.code.toLong())*1099511628211L}
+    fun channelAt(position:Int)=currentList.getOrNull(position)?.channel
     private fun getItem(position:Int)=currentList[position]
     override fun getItemCount()=currentList.size
     // Whole-library switches do not need move animations or expensive list diffs.
@@ -76,6 +79,7 @@ class ChannelAdapter(private val prefs:Prefs,private val onClick:(Channel,Int)->
         holder.itemView.setOnClickListener {if(holder.bindingAdapterPosition!=androidx.recyclerview.widget.RecyclerView.NO_POSITION)onClick(ch,holder.bindingAdapterPosition)}
         holder.itemView.setOnLongClickListener {onLongPress(ch);true}
         holder.itemView.setOnFocusChangeListener { _, focused -> onFocus(if(focused) ch else null) }
+        if(holder.itemView.hasFocus())onFocus(ch)
     }
 }
 
